@@ -47,6 +47,16 @@ hooks/hooks.go    Pre/post tool hooks (.gilgamesh/hooks.json)
 session/session.go JSONL session logging
 ```
 
+## Benchmarking
+
+```bash
+go run ./cmd/bench              # bench default endpoint
+go run ./cmd/bench -all         # bench all profiles
+go run ./cmd/bench -model heavy # bench specific profile
+```
+
+See `TRIALS.md` for model trialing results and findings.
+
 ## Key Behaviors
 
 - Loop detection: same tool+args 2x → forced response

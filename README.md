@@ -144,6 +144,19 @@ curl -X POST http://localhost:7777/api/tools/read -d '{"path": "main.go"}'
 curl -N -X POST http://localhost:7777/api/chat -d '{"message": "list all Go files"}'
 ```
 
+## Benchmarking & Model Trials
+
+Gilgamesh includes a Go benchmark tool for trialing local models:
+
+```bash
+go run ./cmd/bench              # benchmark default endpoint
+go run ./cmd/bench -all         # benchmark all reachable endpoints
+go run ./cmd/bench -model heavy # benchmark specific profile
+go run ./cmd/bench -v           # verbose output
+```
+
+Measures health latency, minimal prompt speed, tool call parsing, one-shot agent response, and full edit task quality. See [TRIALS.md](TRIALS.md) for detailed results, findings, and the ongoing quest for the optimal local coding setup.
+
 ## Architecture
 
 ```
@@ -168,6 +181,7 @@ gilgamesh/
 │   └── server.go     # MCP stdio server
 ├── server/
 │   └── server.go     # HTTP API server
+├── cmd/bench/        # Model benchmark tool (Go)
 ├── config/           # JSON config loader
 ├── context/          # Project context + skills
 ├── hooks/            # Pre/post tool execution hooks

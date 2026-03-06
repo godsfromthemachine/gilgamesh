@@ -28,6 +28,8 @@ gilgamesh/
 │   └── server.go        MCP stdio server (initialize, tools/list, tools/call)
 ├── server/
 │   └── server.go        HTTP API server (health, tools, chat SSE)
+├── cmd/bench/
+│   └── main.go          Model benchmark tool (health, prompt, toolcall, oneshot, edit)
 ├── config/
 │   └── config.go        JSON config loader (fast/default/heavy model profiles)
 ├── context/
@@ -112,6 +114,18 @@ Do NOT bloat the system prompt, tool descriptions, or parameter schemas. Keep th
 ### Version
 - Version hardcoded as `version` constant in `main.go`
 - Currently `0.2.0`
+
+## Benchmarking & Model Trials
+
+See `TRIALS.md` for detailed model benchmarking results and findings. The benchmark tool lives at `cmd/bench/main.go`:
+
+```bash
+go run ./cmd/bench              # bench default endpoint
+go run ./cmd/bench -all         # bench all profiles
+go run ./cmd/bench -model heavy # bench specific profile
+```
+
+Measures: health latency, minimal prompt (TTFT + tok/s), tool call parsing, gilgamesh one-shot, and edit task (create + modify file).
 
 ## Adding a New Tool
 
