@@ -18,7 +18,7 @@ import (
 	"github.com/godsfromthemachine/gilgamesh/tools"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	cfg, err := config.Load()

@@ -31,6 +31,21 @@ const (
 	InternalError  = -32603
 )
 
+// SupportedVersions lists MCP protocol versions this server supports, newest first.
+var SupportedVersions = []string{"2025-03-26", "2024-11-05"}
+
+// NegotiateVersion picks the best protocol version.
+// If the client's requested version is supported, use it.
+// Otherwise fall back to the latest supported version.
+func NegotiateVersion(clientVersion string) string {
+	for _, v := range SupportedVersions {
+		if v == clientVersion {
+			return v
+		}
+	}
+	return SupportedVersions[0]
+}
+
 // MCP initialize
 
 type InitializeParams struct {

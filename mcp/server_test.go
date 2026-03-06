@@ -182,6 +182,121 @@ func TestNotificationNoResponse(t *testing.T) {
 	}
 }
 
+func TestNegotiateVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		client   string
+		expected string
+	}{
+		{"exact match old", "2024-11-05", "2024-11-05"},
+		{"exact match new", "2025-03-26", "2025-03-26"},
+		{"unknown version falls back to latest", "2023-01-01", SupportedVersions[0]},
+		{"empty string falls back to latest", "", SupportedVersions[0]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NegotiateVersion(tt.client)
+			if got != tt.expected {
+				t.Errorf("NegotiateVersion(%q) = %q, want %q", tt.client, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestInitializeVersionNegotiation(t *testing.T) {
+	srv := newTestServer()
+
+	// Client requests an older version — should get that version back
+	input := rpc("initialize", 1, `{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"},"capabilities":{}}`)
+	var out bytes.Buffer
+	srv.Serve(strings.NewReader(input+"\n"), &out)
+
+	var resp Response
+	json.Unmarshal(out.Bytes(), &resp)
+	result, _ := json.Marshal(resp.Result)
+	var init InitializeResult
+	json.Unmarshal(result, &init)
+
+	if init.ProtocolVersion != "2024-11-05" {
+		t.Errorf("protocol = %q, want 2024-11-05", init.ProtocolVersion)
+	}
+}
+
+func TestInitializeUnknownVersion(t *testing.T) {
+	srv := newTestServer()
+
+	// Client requests unknown version — should get latest back
+	input := rpc("initialize", 1, `{"protocolVersion":"1999-01-01","clientInfo":{"name":"old-client","version":"0.1"},"capabilities":{}}`)
+	var out bytes.Buffer
+	srv.Serve(strings.NewReader(input+"\n"), &out)
+
+	var resp Response
+	json.Unmarshal(out.Bytes(), &resp)
+	result, _ := json.Marshal(resp.Result)
+	var init InitializeResult
+	json.Unmarshal(result, &init)
+
+	if init.ProtocolVersion != SupportedVersions[0] {
+		t.Errorf("protocol = %q, want %q (latest)", init.ProtocolVersion, SupportedVersions[0])
+	}
+}
+
+func TestInitializeNoParams(t *testing.T) {
+	srv := newTestServer()
+
+	// Initialize with no params — should default to latest
+	input := rpc("initialize", 1, "")
+	var out bytes.Buffer
+	srv.Serve(strings.NewReader(input+"\n"), &out)
+
+	var resp Response
+	json.Unmarshal(out.Bytes(), &resp)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	result, _ := json.Marshal(resp.Result)
+	var init InitializeResult
+	json.Unmarshal(result, &init)
+
+	if init.ProtocolVersion != SupportedVersions[0] {
+		t.Errorf("protocol = %q, want %q", init.ProtocolVersion, SupportedVersions[0])
+	}
+}
+
+func TestParseError(t *testing.T) {
+	srv := newTestServer()
+	input := `{invalid json}`
+	var out bytes.Buffer
+	srv.Serve(strings.NewReader(input+"\n"), &out)
+
+	var resp Response
+	json.Unmarshal(out.Bytes(), &resp)
+	if resp.Error == nil {
+		t.Fatal("expected parse error")
+	}
+	if resp.Error.Code != ParseError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, ParseError)
+	}
+}
+
+func TestTruncateMCP(t *testing.T) {
+	tests := []struct {
+		input string
+		max   int
+		want  string
+	}{
+		{"hello", 10, "hello"},
+		{"hello world", 5, "hello..."},
+		{"", 5, ""},
+	}
+	for _, tt := range tests {
+		got := truncate(tt.input, tt.max)
+		if got != tt.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
+		}
+	}
+}
+
 func TestMultipleRequests(t *testing.T) {
 	srv := newTestServer()
 	input := strings.Join([]string{

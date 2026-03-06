@@ -88,11 +88,24 @@ func (s *Server) handleRequest(req Request) *Response {
 }
 
 func (s *Server) handleInitialize(req Request) *Response {
+	negotiated := SupportedVersions[0] // default to latest
+	if req.Params != nil {
+		var params InitializeParams
+		if json.Unmarshal(req.Params, &params) == nil && params.ProtocolVersion != "" {
+			negotiated = NegotiateVersion(params.ProtocolVersion)
+			if params.ClientInfo.Name != "" {
+				fmt.Fprintf(os.Stderr, "MCP client: %s %s (protocol %s → %s)\n",
+					params.ClientInfo.Name, params.ClientInfo.Version,
+					params.ProtocolVersion, negotiated)
+			}
+		}
+	}
+
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: InitializeResult{
-			ProtocolVersion: "2024-11-05",
+			ProtocolVersion: negotiated,
 			ServerInfo: ServerInfo{
 				Name:    "gilgamesh",
 				Version: s.version,
