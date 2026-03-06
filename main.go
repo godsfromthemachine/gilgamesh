@@ -12,10 +12,13 @@ import (
 	gilgacontext "github.com/godsfromthemachine/gilgamesh/context"
 	"github.com/godsfromthemachine/gilgamesh/hooks"
 	"github.com/godsfromthemachine/gilgamesh/llm"
+	"github.com/godsfromthemachine/gilgamesh/mcp"
+	"github.com/godsfromthemachine/gilgamesh/server"
 	"github.com/godsfromthemachine/gilgamesh/session"
+	"github.com/godsfromthemachine/gilgamesh/tools"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	cfg, err := config.Load()
@@ -28,6 +31,9 @@ func main() {
 	modelFlag := ""
 	var prompt []string
 	runMode := false
+	mcpMode := false
+	serveMode := false
+	servePort := ":7777"
 
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -39,6 +45,19 @@ func main() {
 			}
 		case "run":
 			runMode = true
+		case "mcp":
+			mcpMode = true
+		case "serve":
+			serveMode = true
+		case "-p", "--port":
+			if i+1 < len(args) {
+				i++
+				port := args[i]
+				if !strings.HasPrefix(port, ":") {
+					port = ":" + port
+				}
+				servePort = port
+			}
 		case "-h", "--help":
 			printUsage()
 			return
@@ -54,6 +73,40 @@ func main() {
 
 	if modelFlag != "" {
 		cfg.ActiveModel = modelFlag
+	}
+
+	// MCP server mode: stdio JSON-RPC, no terminal output on stdout
+	if mcpMode {
+		hookReg := hooks.Load()
+		sessLog := session.NewLogger()
+		defer sessLog.Close()
+		registry := tools.NewRegistry()
+
+		srv := mcp.NewServer(registry, hookReg, sessLog, version)
+		if err := srv.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "mcp error: %s\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// HTTP API server mode
+	if serveMode {
+		model := cfg.GetModel()
+		client := llm.NewClient(model.Endpoint, model.APIKey, model.Name)
+		hookReg := hooks.Load()
+		sessLog := session.NewLogger()
+		defer sessLog.Close()
+
+		ag := agent.New(client, hookReg, sessLog)
+		registry := ag.Registry()
+
+		srv := server.New(registry, ag, hookReg, sessLog, version)
+		if err := srv.ListenAndServe(servePort); err != nil {
+			fmt.Fprintf(os.Stderr, "serve error: %s\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	model := cfg.GetModel()
@@ -219,6 +272,9 @@ Usage:
   gilgamesh run "prompt"        One-shot mode
   gilgamesh run /skill [args]   Run a skill
   gilgamesh -m MODEL [...]      Select model (fast, default, heavy)
+  gilgamesh mcp                 Start MCP server (stdio JSON-RPC)
+  gilgamesh serve               Start HTTP API server (:7777)
+  gilgamesh serve -p 8888       Custom port
 
 Interactive commands:
   /model [fast|default|heavy]  Switch model

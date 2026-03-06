@@ -88,18 +88,68 @@ Invoke with `/skillname` or `/skillname args here`.
 | `/distill [path]` | Summarize a session |
 | `/exit` | Quit |
 
+## MCP Server
+
+Gilgamesh runs as an [MCP](https://modelcontextprotocol.io/) server, exposing its tools to any MCP-compatible client (Claude Desktop, VS Code, other agents) over stdio.
+
+```bash
+gilgamesh mcp
+```
+
+Configure in Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gilgamesh": {
+      "command": "/path/to/gilgamesh",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Implements `initialize`, `tools/list`, and `tools/call` via JSON-RPC 2.0 over stdio.
+
+## HTTP API
+
+Run gilgamesh as an HTTP server for programmatic access:
+
+```bash
+gilgamesh serve              # default port :7777
+gilgamesh serve -p 8888     # custom port
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/tools` | List all tools with schemas |
+| POST | `/api/tools/{name}` | Execute a tool (JSON body = args) |
+| POST | `/api/chat` | Agent conversation (SSE streaming) |
+
+```bash
+# List tools
+curl http://localhost:7777/api/tools
+
+# Execute a tool directly
+curl -X POST http://localhost:7777/api/tools/read -d '{"path": "main.go"}'
+
+# Chat with the agent (SSE stream)
+curl -N -X POST http://localhost:7777/api/chat -d '{"message": "list all Go files"}'
+```
+
 ## Architecture
 
 ```
 gilgamesh/
-├── main.go           # CLI entry, REPL loop
+├── main.go           # CLI entry, REPL, subcommand dispatch
 ├── agent/
-│   ├── agent.go      # Core agent loop (prompt → LLM → tool → repeat)
+│   ├── agent.go      # Core agent loop + event-based variant
 │   └── prompt.go     # System prompt (~300 tokens)
 ├── llm/
 │   └── client.go     # OpenAI-compatible streaming SSE client
 ├── tools/
-│   ├── registry.go   # Tool registration and dispatch
+│   ├── registry.go   # Tool registration, dispatch, enumeration
 │   ├── read.go       # Read file contents
 │   ├── write.go      # Write/create files
 │   ├── edit.go       # Find-and-replace editing
@@ -107,6 +157,11 @@ gilgamesh/
 │   ├── grep.go       # Content search
 │   ├── glob.go       # File pattern matching
 │   └── test.go       # Go test runner (packages, filters, coverage)
+├── mcp/
+│   ├── protocol.go   # JSON-RPC 2.0 + MCP protocol types
+│   └── server.go     # MCP stdio server
+├── server/
+│   └── server.go     # HTTP API server
 ├── config/           # JSON config loader
 ├── context/          # Project context + skills
 ├── hooks/            # Pre/post tool execution hooks

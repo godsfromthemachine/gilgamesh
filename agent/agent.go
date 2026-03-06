@@ -300,6 +300,211 @@ func (a *Agent) streamResponse() (string, []llm.ToolCall, error) {
 	return contentBuf.String(), toolCalls, nil
 }
 
+// EventType identifies agent events for non-terminal consumers (HTTP API).
+type EventType string
+
+const (
+	EventContent    EventType = "content"
+	EventToolCall   EventType = "tool_call"
+	EventToolResult EventType = "tool_result"
+	EventError      EventType = "error"
+	EventDone       EventType = "done"
+)
+
+// Event is emitted during agent execution for programmatic consumers.
+type Event struct {
+	Type    EventType       `json:"type"`
+	Content string          `json:"content,omitempty"`
+	Tool    string          `json:"tool,omitempty"`
+	Args    json.RawMessage `json:"args,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// RunWithEvents is like Run but emits structured events instead of printing to terminal.
+func (a *Agent) RunWithEvents(userMessage string, emit func(Event)) error {
+	a.history = append(a.history, llm.Message{Role: "user", Content: userMessage})
+	a.session.Log(session.Entry{Type: "user", Content: userMessage})
+
+	recentCalls := make(map[string]int)
+
+	for loop := 0; loop < maxToolLoops; loop++ {
+		a.maybeCompactQuiet()
+
+		content, toolCalls, err := a.streamResponseWithEvents(emit)
+		if err != nil {
+			return err
+		}
+
+		assistantMsg := llm.Message{Role: "assistant"}
+		if content != "" {
+			assistantMsg.Content = content
+			a.session.Log(session.Entry{Type: "assistant", Content: content})
+		}
+		if len(toolCalls) > 0 {
+			assistantMsg.ToolCalls = toolCalls
+		}
+		a.history = append(a.history, assistantMsg)
+
+		if len(toolCalls) == 0 {
+			return nil
+		}
+
+		// Loop detection
+		loopDetected := false
+		for _, tc := range toolCalls {
+			key := tc.Function.Name + ":" + tc.Function.Arguments
+			recentCalls[key]++
+			if recentCalls[key] >= 2 {
+				loopDetected = true
+			}
+		}
+		if loopDetected {
+			emit(Event{Type: EventError, Error: "loop detected — forcing response"})
+			a.history = append(a.history, llm.Message{
+				Role:    "user",
+				Content: "You are repeating tool calls. Stop using tools and provide your response now based on the information you already have.",
+			})
+			content, _, err := a.streamResponseWithEvents(emit)
+			if err != nil {
+				return err
+			}
+			if content != "" {
+				a.history = append(a.history, llm.Message{Role: "assistant", Content: content})
+				a.session.Log(session.Entry{Type: "assistant", Content: content})
+			}
+			return nil
+		}
+
+		// Execute tool calls
+		for _, tc := range toolCalls {
+			args := json.RawMessage(tc.Function.Arguments)
+			emit(Event{Type: EventToolCall, Tool: tc.Function.Name, Args: args})
+
+			// Pre-hooks
+			if a.hooks.HasHooks() {
+				preResults := a.hooks.Run(hooks.PreHook, tc.Function.Name, args, "")
+				for _, r := range preResults {
+					if r.Err != nil {
+						emit(Event{Type: EventError, Error: "hook blocked: " + r.Err.Error()})
+						a.history = append(a.history, llm.Message{
+							Role:       "tool",
+							Content:    fmt.Sprintf("Blocked by pre-hook: %s", r.Err),
+							ToolCallID: tc.ID,
+						})
+						continue
+					}
+				}
+			}
+
+			start := time.Now()
+			result, execErr := a.registry.Execute(tc.Function.Name, args)
+			elapsed := time.Since(start)
+
+			a.session.Log(session.Entry{
+				Type:     "tool_call",
+				Tool:     tc.Function.Name,
+				Args:     args,
+				Duration: elapsed,
+			})
+
+			if execErr != nil {
+				result = fmt.Sprintf("Error: %s", execErr)
+			}
+
+			// Post-hooks
+			if a.hooks.HasHooks() {
+				a.hooks.Run(hooks.PostHook, tc.Function.Name, args, result)
+			}
+
+			a.session.Log(session.Entry{Type: "tool_result", Tool: tc.Function.Name, Content: truncate(result, 500)})
+
+			emit(Event{Type: EventToolResult, Tool: tc.Function.Name, Content: result})
+
+			a.history = append(a.history, llm.Message{
+				Role:       "tool",
+				Content:    result,
+				ToolCallID: tc.ID,
+			})
+		}
+	}
+
+	return fmt.Errorf("tool loop limit (%d) reached", maxToolLoops)
+}
+
+// streamResponseWithEvents streams LLM output via events instead of terminal.
+func (a *Agent) streamResponseWithEvents(emit func(Event)) (string, []llm.ToolCall, error) {
+	var contentBuf strings.Builder
+	toolCallMap := make(map[int]*llm.ToolCall)
+
+	err := a.client.StreamChat(a.history, a.registry.Definitions(), func(delta llm.StreamDelta) {
+		if delta.Content != "" {
+			emit(Event{Type: EventContent, Content: delta.Content})
+			contentBuf.WriteString(delta.Content)
+		}
+
+		for _, tc := range delta.ToolCalls {
+			idx := tc.Index
+			if existing, ok := toolCallMap[idx]; ok {
+				existing.Function.Arguments += tc.Function.Arguments
+				if tc.Function.Name != "" {
+					existing.Function.Name = tc.Function.Name
+				}
+				if tc.ID != "" {
+					existing.ID = tc.ID
+				}
+			} else {
+				toolCallMap[idx] = &llm.ToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
+		}
+	})
+
+	if err != nil {
+		return "", nil, err
+	}
+
+	var toolCalls []llm.ToolCall
+	for _, tc := range toolCallMap {
+		toolCalls = append(toolCalls, *tc)
+	}
+
+	return contentBuf.String(), toolCalls, nil
+}
+
+// maybeCompactQuiet is like maybeCompact but without terminal output.
+func (a *Agent) maybeCompactQuiet() {
+	tokens := a.EstimateTokens()
+	if tokens < compactThreshold {
+		return
+	}
+
+	keepTail := 4
+	if len(a.history) <= keepTail+1 {
+		return
+	}
+
+	for i := 1; i < len(a.history)-keepTail; i++ {
+		m := &a.history[i]
+		if m.Role == "tool" && len(m.Content) > 200 {
+			lines := strings.SplitN(m.Content, "\n", 4)
+			if len(lines) > 3 {
+				m.Content = strings.Join(lines[:3], "\n") + "\n...(compacted)"
+			}
+		}
+	}
+}
+
+// Registry returns the agent's tool registry for external consumers.
+func (a *Agent) Registry() *tools.Registry {
+	return a.registry
+}
+
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s

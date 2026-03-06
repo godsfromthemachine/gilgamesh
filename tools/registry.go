@@ -52,6 +52,11 @@ func (r *Registry) Definitions() []llm.ToolDef {
 	return defs
 }
 
+// Tools returns the raw tool map for external protocol adapters (MCP, HTTP).
+func (r *Registry) Tools() map[string]*Tool {
+	return r.tools
+}
+
 // Execute runs a tool by name with the given arguments.
 func (r *Registry) Execute(name string, args json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
