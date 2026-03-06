@@ -1,8 +1,14 @@
-# gilgamesh
+<p align="center">
+  <img src="assets/logo.svg" alt="gilgamesh" width="360"/>
+</p>
 
-A local AI-powered coding agent that takes a test-driven approach to software engineering. Built for CPU inference with lean token overhead.
+<p align="center">
+  A local AI-powered coding agent that takes a test-driven approach to software engineering.<br/>
+  Built for CPU inference with lean token overhead.<br/>
+  Part of the <a href="https://github.com/godsfromthemachine">Gods from the Machine</a> project.
+</p>
 
-Part of the [Gods from the Machine](https://github.com/godsfromthemachine) project.
+---
 
 ## What is this?
 
