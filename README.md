@@ -1,6 +1,6 @@
 # gilgamesh
 
-A local AI-powered coding agent and testing companion for Go. Built for CPU inference with lean token overhead.
+A local AI-powered coding agent that takes a test-driven approach to software engineering. Built for CPU inference with lean token overhead.
 
 Part of the [Gods from the Machine](https://github.com/godsfromthemachine) project.
 
@@ -9,7 +9,7 @@ Part of the [Gods from the Machine](https://github.com/godsfromthemachine) proje
 Gilgamesh is an interactive CLI agent that connects to a local llama.cpp server (or any OpenAI-compatible endpoint) and provides tool-calling capabilities for software engineering tasks. It's designed to run on CPU with small models (Qwen3.5 2B/4B) by keeping total prompt overhead under ~1,500 tokens.
 
 Features:
-- **6 built-in tools**: read, write, edit, bash, grep, glob
+- **7 built-in tools**: read, write, edit, bash, grep, glob, test
 - **Streaming SSE**: tokens stream to terminal as they arrive
 - **Multi-model profiles**: switch between fast/default/heavy models mid-session
 - **Skills system**: reusable prompt templates (`.gilgamesh/skills/*.md`)
@@ -105,7 +105,8 @@ gilgamesh/
 │   ├── edit.go       # Find-and-replace editing
 │   ├── bash.go       # Shell command execution
 │   ├── grep.go       # Content search
-│   └── glob.go       # File pattern matching
+│   ├── glob.go       # File pattern matching
+│   └── test.go       # Go test runner (packages, filters, coverage)
 ├── config/           # JSON config loader
 ├── context/          # Project context + skills
 ├── hooks/            # Pre/post tool execution hooks

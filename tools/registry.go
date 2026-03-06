@@ -28,6 +28,7 @@ func NewRegistry() *Registry {
 	r.Register(BashTool())
 	r.Register(GrepTool())
 	r.Register(GlobTool())
+	r.Register(TestTool())
 	return r
 }
 
