@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/godsfromthemachine/gilgamesh/agent"
@@ -33,15 +36,41 @@ func New(registry *tools.Registry, ag *agent.Agent, hookReg *hooks.Registry, ses
 	}
 }
 
-func (s *Server) ListenAndServe(addr string) error {
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/tools", s.handleToolsList)
 	mux.HandleFunc("/api/tools/", s.handleToolCall)
 	mux.HandleFunc("/api/chat", s.handleChat)
+	return mux
+}
+
+func (s *Server) ListenAndServe(addr string) error {
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      s.Handler(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 5 * time.Minute, // long for SSE streaming
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	done := make(chan error, 1)
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		fmt.Fprintf(os.Stderr, "\nshutting down...\n")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		done <- srv.Shutdown(ctx)
+	}()
 
 	fmt.Fprintf(os.Stderr, "gilgamesh HTTP server v%s listening on %s\n", s.version, addr)
-	return http.ListenAndServe(addr, mux)
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		return err
+	}
+	return <-done
 }
 
 // GET /api/health
