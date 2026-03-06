@@ -133,6 +133,61 @@ func TestRegisterCustomTool(t *testing.T) {
 	}
 }
 
+func TestFilterAllowed(t *testing.T) {
+	r := NewRegistry()
+	r.Filter([]string{"read", "write"}, nil)
+
+	tools := r.Tools()
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools after allow filter, got %d", len(tools))
+	}
+	if _, ok := tools["read"]; !ok {
+		t.Error("missing 'read' after allow filter")
+	}
+	if _, ok := tools["write"]; !ok {
+		t.Error("missing 'write' after allow filter")
+	}
+}
+
+func TestFilterDenied(t *testing.T) {
+	r := NewRegistry()
+	r.Filter(nil, []string{"bash", "test"})
+
+	tools := r.Tools()
+	if _, ok := tools["bash"]; ok {
+		t.Error("'bash' should be denied")
+	}
+	if _, ok := tools["test"]; ok {
+		t.Error("'test' should be denied")
+	}
+	if len(tools) != 5 {
+		t.Fatalf("expected 5 tools after deny filter, got %d", len(tools))
+	}
+}
+
+func TestFilterAllowedAndDenied(t *testing.T) {
+	r := NewRegistry()
+	// Allow read, write, bash — then deny bash
+	r.Filter([]string{"read", "write", "bash"}, []string{"bash"})
+
+	tools := r.Tools()
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools after combined filter, got %d", len(tools))
+	}
+	if _, ok := tools["bash"]; ok {
+		t.Error("'bash' should be denied even though allowed")
+	}
+}
+
+func TestFilterEmpty(t *testing.T) {
+	r := NewRegistry()
+	initial := len(r.Tools())
+	r.Filter(nil, nil)
+	if len(r.Tools()) != initial {
+		t.Error("empty filter should not change tool count")
+	}
+}
+
 func containsStr(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && indexOf(s, substr) >= 0
 }

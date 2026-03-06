@@ -29,7 +29,7 @@ go test ./... -v -cover      # run all tests
 - **Test everything.** This is a TDD agent — it must have comprehensive tests. Use table-driven tests with `testing` stdlib.
 - **Each tool is a file.** `tools/newtool.go` returns `*Tool` with `Name`, `Description`, `Parameters` (JSON Schema), `Execute` (closure).
 - **All three interfaces share one registry.** CLI, MCP, and HTTP all use `tools.Registry`. No capability is exclusive to any interface.
-- **Version is in `main.go`.** Constant `version = "0.3.0"`.
+- **Version is in `main.go`.** Constant `version = "0.4.0"`.
 
 ## Project Structure
 

@@ -66,6 +66,26 @@ func (r *Registry) Execute(name string, args json.RawMessage) (string, error) {
 	return t.Execute(args)
 }
 
+// Filter restricts the registry to only allowed tools and removes denied tools.
+// If allowed is non-empty, only tools in the list are kept.
+// Denied tools are always removed regardless of the allowed list.
+func (r *Registry) Filter(allowed, denied []string) {
+	if len(allowed) > 0 {
+		keep := make(map[string]bool, len(allowed))
+		for _, name := range allowed {
+			keep[name] = true
+		}
+		for name := range r.tools {
+			if !keep[name] {
+				delete(r.tools, name)
+			}
+		}
+	}
+	for _, name := range denied {
+		delete(r.tools, name)
+	}
+}
+
 // schema is a helper to create JSON Schema bytes inline.
 func schema(s string) json.RawMessage {
 	return json.RawMessage(s)

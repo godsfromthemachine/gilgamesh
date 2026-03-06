@@ -18,7 +18,7 @@ import (
 	"github.com/godsfromthemachine/gilgamesh/tools"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	cfg, err := config.Load()
@@ -49,6 +49,14 @@ func main() {
 			mcpMode = true
 		case "serve":
 			serveMode = true
+		case "completion":
+			shell := "bash"
+			if i+1 < len(args) {
+				i++
+				shell = args[i]
+			}
+			printCompletion(shell)
+			return
 		case "-p", "--port":
 			if i+1 < len(args) {
 				i++
@@ -81,6 +89,7 @@ func main() {
 		sessLog := session.NewLogger()
 		defer sessLog.Close()
 		registry := tools.NewRegistry()
+		registry.Filter(cfg.AllowedTools, cfg.DeniedTools)
 
 		srv := mcp.NewServer(registry, hookReg, sessLog, version)
 		if err := srv.Run(); err != nil {
@@ -99,6 +108,7 @@ func main() {
 		defer sessLog.Close()
 
 		ag := agent.New(client, hookReg, sessLog)
+		ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 		registry := ag.Registry()
 
 		srv := server.New(registry, ag, hookReg, sessLog, version)
@@ -116,6 +126,7 @@ func main() {
 	defer sessLog.Close()
 
 	ag := agent.New(client, hookReg, sessLog)
+	ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 	skills := gilgacontext.LoadSkills()
 
 	fmt.Printf("\033[1mgilgamesh\033[0m v%s · %s · %s", version, cfg.ActiveModel, model.Name)
@@ -275,6 +286,7 @@ Usage:
   gilgamesh mcp                 Start MCP server (stdio JSON-RPC)
   gilgamesh serve               Start HTTP API server (:7777)
   gilgamesh serve -p 8888       Custom port
+  gilgamesh completion [shell]  Generate shell completions (bash, zsh, fish)
 
 Interactive commands:
   /model [fast|default|heavy]  Switch model
@@ -295,4 +307,95 @@ Configuration:
 Part of the Gods from the Machine project.
 https://github.com/godsfromthemachine
 `, version)
+}
+
+func printCompletion(shell string) {
+	switch shell {
+	case "bash":
+		fmt.Print(`_gilgamesh() {
+    local cur prev cmds
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    cmds="run mcp serve completion"
+
+    case "$prev" in
+        gilgamesh)
+            COMPREPLY=( $(compgen -W "$cmds -m --model -h --help -v --version" -- "$cur") )
+            return 0
+            ;;
+        -m|--model)
+            COMPREPLY=( $(compgen -W "fast default heavy" -- "$cur") )
+            return 0
+            ;;
+        -p|--port)
+            return 0
+            ;;
+        completion)
+            COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
+            return 0
+            ;;
+        run)
+            return 0
+            ;;
+    esac
+}
+complete -F _gilgamesh gilgamesh
+`)
+	case "zsh":
+		fmt.Print(`#compdef gilgamesh
+
+_gilgamesh() {
+    local -a commands
+    commands=(
+        'run:One-shot mode'
+        'mcp:Start MCP server'
+        'serve:Start HTTP API server'
+        'completion:Generate shell completions'
+    )
+
+    _arguments -C \
+        '-m[Select model]:model:(fast default heavy)' \
+        '--model[Select model]:model:(fast default heavy)' \
+        '-h[Show help]' \
+        '--help[Show help]' \
+        '-v[Show version]' \
+        '--version[Show version]' \
+        '1:command:->cmd' \
+        '*::arg:->args'
+
+    case "$state" in
+        cmd)
+            _describe 'command' commands
+            ;;
+        args)
+            case "$words[1]" in
+                serve)
+                    _arguments '-p[Port]:port:'
+                    ;;
+                completion)
+                    _values 'shell' bash zsh fish
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_gilgamesh "$@"
+`)
+	case "fish":
+		fmt.Print(`complete -c gilgamesh -n '__fish_use_subcommand' -a 'run' -d 'One-shot mode'
+complete -c gilgamesh -n '__fish_use_subcommand' -a 'mcp' -d 'Start MCP server'
+complete -c gilgamesh -n '__fish_use_subcommand' -a 'serve' -d 'Start HTTP API server'
+complete -c gilgamesh -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completions'
+complete -c gilgamesh -n '__fish_use_subcommand' -s m -l model -xa 'fast default heavy' -d 'Select model'
+complete -c gilgamesh -n '__fish_use_subcommand' -s h -l help -d 'Show help'
+complete -c gilgamesh -n '__fish_use_subcommand' -s v -l version -d 'Show version'
+complete -c gilgamesh -n '__fish_seen_subcommand_from serve' -s p -l port -d 'Server port'
+complete -c gilgamesh -n '__fish_seen_subcommand_from completion' -xa 'bash zsh fish'
+`)
+	default:
+		fmt.Fprintf(os.Stderr, "unsupported shell: %s (supported: bash, zsh, fish)\n", shell)
+		os.Exit(1)
+	}
 }

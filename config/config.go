@@ -14,8 +14,10 @@ type ModelConfig struct {
 }
 
 type Config struct {
-	Models      map[string]ModelConfig `json:"models"`
-	ActiveModel string                 `json:"active_model"`
+	Models       map[string]ModelConfig `json:"models"`
+	ActiveModel  string                 `json:"active_model"`
+	AllowedTools []string               `json:"allowed_tools,omitempty"` // whitelist (if set, only these tools)
+	DeniedTools  []string               `json:"denied_tools,omitempty"`  // blacklist (excluded tools)
 }
 
 func DefaultConfig() *Config {

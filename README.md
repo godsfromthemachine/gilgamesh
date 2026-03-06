@@ -16,6 +16,8 @@ Gilgamesh is an interactive CLI agent that connects to a local llama.cpp server 
 
 Features:
 - **7 built-in tools**: read, write, edit, bash, grep, glob, test
+- **Multi-language testing**: auto-detects Go, Python, Rust, Zig, Node.js projects
+- **Configurable tool permissions**: whitelist/blacklist tools per project via config
 - **Streaming SSE**: tokens stream to terminal as they arrive
 - **Multi-model profiles**: switch between fast/default/heavy models mid-session
 - **Skills system**: reusable prompt templates (`.gilgamesh/skills/*.md`)
@@ -23,6 +25,7 @@ Features:
 - **Session logging**: JSONL session logs with distill summaries
 - **Loop detection**: detects and breaks out of repeated tool calls
 - **Context compaction**: automatically trims old tool results to stay within context limits
+- **Shell completion**: bash, zsh, fish (`gilgamesh completion bash`)
 
 ## Quick start
 
@@ -63,9 +66,12 @@ Create `gilgamesh.json` in your project root or `~/.config/gilgamesh/gilgamesh.j
       "api_key": "sk-local"
     }
   },
-  "active_model": "default"
+  "active_model": "default",
+  "denied_tools": ["bash"]
 }
 ```
+
+Use `allowed_tools` to whitelist specific tools, or `denied_tools` to blacklist them. If both are set, allowed is applied first, then denied.
 
 ## Project context
 
@@ -175,7 +181,7 @@ gilgamesh/
 │   ├── bash.go       # Shell command execution
 │   ├── grep.go       # Content search
 │   ├── glob.go       # File pattern matching
-│   └── test.go       # Go test runner (packages, filters, coverage)
+│   └── test.go       # Multi-language test runner (Go, Python, Rust, Zig, Node)
 ├── mcp/
 │   ├── protocol.go   # JSON-RPC 2.0 + MCP protocol types
 │   └── server.go     # MCP stdio server

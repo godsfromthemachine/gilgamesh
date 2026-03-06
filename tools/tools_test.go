@@ -582,6 +582,126 @@ func TestGrepToolCases(t *testing.T) {
 	}
 }
 
+// --- Test Tool Tests ---
+
+func TestDetectLanguage(t *testing.T) {
+	tests := []struct {
+		name   string
+		files  map[string]string
+		expect string
+	}{
+		{"go project", map[string]string{"go.mod": "module test"}, "go"},
+		{"rust project", map[string]string{"Cargo.toml": "[package]"}, "rust"},
+		{"zig project", map[string]string{"build.zig": "const std = @import(\"std\");"}, "zig"},
+		{"node project", map[string]string{"package.json": "{}"}, "node"},
+		{"python pyproject", map[string]string{"pyproject.toml": "[project]"}, "python"},
+		{"python setup.py", map[string]string{"setup.py": "from setuptools import setup"}, "python"},
+		{"python pytest.ini", map[string]string{"pytest.ini": "[pytest]"}, "python"},
+		{"python requirements", map[string]string{"requirements.txt": "flask"}, "python"},
+		{"go takes priority over node", map[string]string{"go.mod": "module test", "package.json": "{}"}, "go"},
+		{"empty dir defaults to go", map[string]string{}, "go"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range tt.files {
+				os.WriteFile(filepath.Join(dir, name), []byte(content), 0644)
+			}
+			// Change to temp dir so detectLanguage reads the right files
+			orig, _ := os.Getwd()
+			os.Chdir(dir)
+			defer os.Chdir(orig)
+
+			got := detectLanguage()
+			if got != tt.expect {
+				t.Errorf("detectLanguage() = %q, want %q", got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestTestToolUnsupportedLanguage(t *testing.T) {
+	tool := TestTool()
+	result, err := tool.Execute(toJSON(map[string]any{"language": "cobol"}))
+	if err == nil {
+		t.Fatalf("expected error for unsupported language, got result: %s", result)
+	}
+	if !strings.Contains(err.Error(), "unsupported language") {
+		t.Errorf("error should mention unsupported language, got: %s", err)
+	}
+}
+
+func TestTestToolGoOnTempProject(t *testing.T) {
+	dir := t.TempDir()
+	// Create a minimal Go module with a passing test
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "add.go"), []byte("package testmod\n\nfunc Add(a, b int) int { return a + b }\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "add_test.go"), []byte("package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 { t.Fatal(\"bad\") }\n}\n"), 0644)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	tool := TestTool()
+	result, err := tool.Execute(toJSON(map[string]any{"language": "go", "package": "."}))
+	if err != nil {
+		t.Fatalf("test tool error: %v", err)
+	}
+	if !strings.HasPrefix(result, "[go]") {
+		t.Errorf("result should start with [go], got: %q", result[:min(50, len(result))])
+	}
+	if !strings.Contains(result, "ok") {
+		t.Errorf("expected passing test output, got:\n%s", result)
+	}
+}
+
+func TestTestToolGoFailingTest(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "bad_test.go"), []byte("package testmod\n\nimport \"testing\"\n\nfunc TestBad(t *testing.T) { t.Fatal(\"intentional\") }\n"), 0644)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	tool := TestTool()
+	result, err := tool.Execute(toJSON(map[string]any{"language": "go"}))
+	if err != nil {
+		t.Fatalf("test tool should not return error for test failures: %v", err)
+	}
+	if !strings.Contains(result, "FAIL") {
+		t.Errorf("expected FAIL in output, got:\n%s", result)
+	}
+}
+
+func TestTestToolAutoDetect(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "x.go"), []byte("package testmod\n"), 0644)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	tool := TestTool()
+	// No language specified — should auto-detect Go
+	result, err := tool.Execute(toJSON(map[string]any{}))
+	if err != nil {
+		t.Fatalf("test tool error: %v", err)
+	}
+	if !strings.HasPrefix(result, "[go]") {
+		t.Errorf("auto-detected result should start with [go], got: %q", result[:min(50, len(result))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // --- Helper ---
 
 func toJSON(m map[string]any) json.RawMessage {
