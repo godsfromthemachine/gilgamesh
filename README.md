@@ -79,11 +79,22 @@ Add a `.gilgameshfile` or `.gilgamesh/context.md` to your project root to inject
 
 ## Skills
 
-Drop `.md` files into `.gilgamesh/skills/` (project-local) or `~/.config/gilgamesh/skills/` (global). Use `{{args}}` for argument substitution.
+Gilgamesh ships with 6 built-in skills available everywhere:
+
+| Skill | Description |
+|-------|-------------|
+| `/commit` | Stage and commit with descriptive message |
+| `/review [file]` | Review code for bugs, style, improvements |
+| `/explain [file]` | Explain code or architecture |
+| `/fix [issue]` | Write failing test, then fix the bug |
+| `/refactor [target]` | Refactor while keeping tests green |
+| `/doc [target]` | Generate or update documentation |
+
+Add custom skills by dropping `.md` files into `.gilgamesh/skills/` (project-local) or `~/.config/gilgamesh/skills/` (global). Project-local skills override built-in skills with the same name. Use `{{args}}` for argument substitution.
 
 ```markdown
 # Build and test
-Build the project and run all tests.
+Build the project and run all tests. {{args}}
 ```
 
 Invoke with `/skillname` or `/skillname args here`.

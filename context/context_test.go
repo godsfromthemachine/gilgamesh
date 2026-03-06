@@ -160,6 +160,83 @@ func TestLoadSkillsFromDir(t *testing.T) {
 	}
 }
 
+func TestBuiltinSkillsLoaded(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	// No project skills — should still get built-in skills
+	skills := LoadSkills()
+
+	expected := []string{"commit", "review", "explain", "fix", "refactor", "doc"}
+	for _, name := range expected {
+		s, ok := skills[name]
+		if !ok {
+			t.Errorf("missing built-in skill: %s", name)
+			continue
+		}
+		if !s.Builtin {
+			t.Errorf("skill %s should be marked as Builtin", name)
+		}
+		if s.Description == "" {
+			t.Errorf("skill %s has empty description", name)
+		}
+	}
+}
+
+func TestProjectSkillOverridesBuiltin(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	// Create a project-local skill with the same name as a built-in
+	skillDir := filepath.Join(dir, ".gilgamesh", "skills")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "commit.md"), []byte("# Custom commit\nMy custom commit workflow: {{args}}"), 0644)
+
+	skills := LoadSkills()
+	s, ok := skills["commit"]
+	if !ok {
+		t.Fatal("missing commit skill")
+	}
+	if s.Builtin {
+		t.Error("project-local commit should override built-in (Builtin should be false)")
+	}
+	if s.Description != "Custom commit" {
+		t.Errorf("Description = %q, want 'Custom commit'", s.Description)
+	}
+}
+
+func TestCountSkills(t *testing.T) {
+	skills := map[string]Skill{
+		"commit":  {Builtin: true},
+		"review":  {Builtin: true},
+		"custom1": {Builtin: false},
+	}
+	builtin, custom := CountSkills(skills)
+	if builtin != 2 {
+		t.Errorf("builtin = %d, want 2", builtin)
+	}
+	if custom != 1 {
+		t.Errorf("custom = %d, want 1", custom)
+	}
+}
+
+func TestListSkillsShowsBuiltinMarker(t *testing.T) {
+	skills := map[string]Skill{
+		"commit": {Name: "commit", Description: "Commit changes", Builtin: true},
+		"custom": {Name: "custom", Description: "Custom thing", Builtin: false},
+	}
+	got := ListSkills(skills)
+	if !containsStr(got, "(built-in)") {
+		t.Errorf("ListSkills should show (built-in) marker, got: %s", got)
+	}
+	// Custom skill should NOT have the marker
+	// (can't easily check per-line, but the marker should appear at least once)
+}
+
 func containsStr(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {

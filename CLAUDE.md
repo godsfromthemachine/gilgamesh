@@ -29,7 +29,7 @@ go test ./... -v -cover      # run all tests
 - **Test everything.** This is a TDD agent — it must have comprehensive tests. Use table-driven tests with `testing` stdlib.
 - **Each tool is a file.** `tools/newtool.go` returns `*Tool` with `Name`, `Description`, `Parameters` (JSON Schema), `Execute` (closure).
 - **All three interfaces share one registry.** CLI, MCP, and HTTP all use `tools.Registry`. No capability is exclusive to any interface.
-- **Version is in `main.go`.** Constant `version = "0.4.0"`.
+- **Version is in `main.go`.** Constant `version = "0.5.0"`.
 
 ## Project Structure
 
@@ -42,7 +42,8 @@ tools/registry.go Tool registration + dispatch; tools/*.go = 7 built-in tools
 mcp/protocol.go   JSON-RPC 2.0 types; mcp/server.go = MCP stdio server
 server/server.go  HTTP API: /api/health, /api/tools, /api/tools/{name}, /api/chat (SSE)
 config/config.go  Model profiles (fast/default/heavy)
-context/context.go Project context + skills (.gilgamesh/skills/*.md)
+context/context.go Project context + skills (6 built-in + project-local)
+context/builtin_skills/ Embedded skill templates (commit, review, explain, fix, refactor, doc)
 hooks/hooks.go    Pre/post tool hooks (.gilgamesh/hooks.json)
 session/session.go JSONL session logging
 ```

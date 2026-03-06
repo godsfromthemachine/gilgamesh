@@ -113,7 +113,7 @@ Do NOT bloat the system prompt, tool descriptions, or parameter schemas. Keep th
 
 ### Version
 - Version hardcoded as `version` constant in `main.go`
-- Currently `0.4.0`
+- Currently `0.5.0`
 
 ## Benchmarking & Model Trials
 

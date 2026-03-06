@@ -18,7 +18,7 @@ import (
 	"github.com/godsfromthemachine/gilgamesh/tools"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func main() {
 	cfg, err := config.Load()
@@ -139,7 +139,12 @@ func main() {
 		fmt.Printf("\033[90mhooks loaded\033[0m\n")
 	}
 	if len(skills) > 0 {
-		fmt.Printf("\033[90m%d skills available\033[0m\n", len(skills))
+		builtin, custom := gilgacontext.CountSkills(skills)
+		if custom > 0 {
+			fmt.Printf("\033[90m%d skills available (%d built-in, %d project)\033[0m\n", len(skills), builtin, custom)
+		} else {
+			fmt.Printf("\033[90m%d skills available (%d built-in)\033[0m\n", len(skills), builtin)
+		}
 	}
 
 	// One-shot mode
