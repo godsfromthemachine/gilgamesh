@@ -199,7 +199,11 @@ func main() {
 		// Slash commands
 		switch {
 		case input == "/exit" || input == "/quit":
+			// Save conversation history for resume
 			if p := sessLog.Path(); p != "" {
+				if histPath, err := session.SaveHistory(p, ag.History()); err == nil && histPath != "" {
+					fmt.Printf("\033[90mHistory saved: %s\033[0m\n", histPath)
+				}
 				fmt.Printf("\033[90mSession: %s\033[0m\n", p)
 			}
 			fmt.Println("Bye.")
@@ -222,7 +226,7 @@ func main() {
 			fmt.Printf("\033[90mSwitched to %s (%s)\033[0m\n", cfg.ActiveModel, model.Name)
 			continue
 		case input == "/help":
-			fmt.Println("\033[90mCommands: /model, /clear, /tokens, /skills, /memory, /remember, /forget, /session, /distill, /exit, /help\033[0m")
+			fmt.Println("\033[90mCommands: /model, /clear, /tokens, /skills, /memory, /remember, /forget, /resume, /sessions, /session, /distill, /exit, /help\033[0m")
 			continue
 		case input == "/tokens":
 			fmt.Printf("\033[90mEstimated context: ~%d tokens\033[0m\n", ag.EstimateTokens())
@@ -268,6 +272,47 @@ func main() {
 					fmt.Printf("\033[90mNo memories matching %q\033[0m\n", arg)
 				}
 			}
+			continue
+		case input == "/sessions":
+			histories := session.ListHistories(10)
+			if len(histories) == 0 {
+				fmt.Println("\033[90mNo saved sessions.\033[0m")
+			} else {
+				fmt.Println("\033[90mRecent sessions (newest first):\033[0m")
+				for i, h := range histories {
+					fmt.Printf("\033[90m  %d. %s\033[0m\n", i+1, h)
+				}
+				fmt.Println("\033[90mUse /resume to load the most recent, or /resume <path>\033[0m")
+			}
+			continue
+		case input == "/resume" || strings.HasPrefix(input, "/resume "):
+			histPath := ""
+			arg := strings.TrimPrefix(input, "/resume ")
+			if arg == "/resume" || arg == "" {
+				histPath = session.LatestHistory()
+				if histPath == "" {
+					fmt.Println("\033[90mNo saved sessions to resume.\033[0m")
+					continue
+				}
+			} else {
+				histPath = arg
+			}
+			history, err := session.LoadHistory(histPath)
+			if err != nil {
+				fmt.Printf("\033[31mFailed to load: %s\033[0m\n", err)
+				continue
+			}
+			ag.LoadHistory(history)
+			// Count user messages for context
+			userMsgs := 0
+			for _, m := range history {
+				if m.Role == "user" {
+					userMsgs++
+				}
+			}
+			fmt.Printf("\033[90mResumed %d messages (%d user) from %s\033[0m\n",
+				len(history), userMsgs, histPath)
+			fmt.Printf("\033[90mEstimated context: ~%d tokens\033[0m\n", ag.EstimateTokens())
 			continue
 		case strings.HasPrefix(input, "/distill"):
 			parts := strings.Fields(input)
@@ -339,6 +384,8 @@ Interactive commands:
   /memory                      List remembered facts
   /remember <fact>             Remember a fact across sessions
   /forget <n|text>             Forget by number or matching text
+  /resume [path]               Resume a previous conversation
+  /sessions                    List recent saved sessions
   /tokens                      Show context token estimate
   /session                     Show session log path
   /distill [path]              Summarize session for skill extraction

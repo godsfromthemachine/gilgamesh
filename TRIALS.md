@@ -368,18 +368,39 @@ Gilgamesh compacts context at ~12K tokens, so 65536 ctx is rarely needed. Testin
 - `--ctx-size 16384` would save ~500MB while covering all practical agent usage
 - **Recommendation**: Use `--ctx-size 16384` for memory-constrained setups, `65536` only if running long multi-turn sessions without compaction
 
+### KV Cache Quantization (New Finding)
+
+Tested with Qwen3.5-2B/4B Q4_K_M on llama-server, ctx-size 16384, 12 threads. KV cache stores attention keys/values — quantizing from f16 to q4_0/q8_0 saves memory at potential quality cost.
+
+**2B Q4_K_M memory usage:**
+
+| KV Cache | RAM (MB) | vs f16 | Quality |
+|----------|----------|--------|---------|
+| f16 (default) | 2097 | baseline | baseline |
+| q8_0 | 2008 | -89 MB (4%) | identical |
+| q5_1 | 1970 | -127 MB (6%) | identical |
+| q4_0 | 1952 | -145 MB (7%) | tool calls work, bench PASS |
+
+**4B Q4_K_M:** f16 ~4596 MB → q4_0 4381 MB (-215 MB / 5%)
+
+**Agent benchmark with q4_0 KV (2B):** Minimal 656ms, tool call 3.3s, edit 52s PASS — no degradation.
+
+**Key findings:**
+- **q4_0 KV works well with Qwen3.5** — no quality degradation in tool calling or edit tasks
+- Savings are modest at ctx=16384 (145MB for 2B, 215MB for 4B), scale linearly with ctx
+- **Recommendation**: Use `-ctk q4_0 -ctv q4_0` for memory-constrained setups
+- Dual-model serving with q4_0 KV: 1952 + 4381 = 6.3GB total (21% of 30GB RAM)
+
 ## Future Trials
 
 - [x] ~~4B Q4_K_M agent benchmarks~~ — DONE: better than Q8_0, recommend as heavy profile
 - [x] ~~Thread count tuning~~ — DONE: 12 threads optimal, 16 threads hurts TG
 - [x] ~~Context length impact~~ — DONE: 65K ctx adds 672MB RAM, 16K is sufficient
-- [ ] IQ4_XS / IQ3_M quants — smaller memory footprint, quality impact?
-- [x] ~~Context length impact~~ — DONE: 65K ctx adds 672MB RAM, 16K sufficient for agent
-- [x] ~~Thread count tuning~~ — DONE: 12 threads optimal on 16-core EPYC
 - [x] ~~Batch size tuning~~ — DONE: b=256 optimal, b=512 regresses (cache pressure)
 - [x] ~~9B Q8_0 agent benchmarks~~ — DONE: not worth it, same efficiency as 4B but 40-70% slower
+- [x] ~~KV cache quantization~~ — DONE: q4_0 saves 5-7% RAM, no quality loss with Qwen3.5
+- [ ] IQ4_XS / IQ3_M quants — smaller memory footprint, quality impact?
 - [ ] New model families — Phi-4, Gemma 3, others that fit CPU constraints
 - [ ] Speculative decoding — draft model (0.8B) + verify (4B)?
 - [ ] Multi-model routing — simple tasks → 2B, complex → 4B automatically
 - [ ] Flash attention impact on CPU — if llama.cpp supports it
-- [ ] KV cache quantization — reduce memory for longer context

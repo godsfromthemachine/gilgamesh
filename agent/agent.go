@@ -514,6 +514,26 @@ func (a *Agent) Registry() *tools.Registry {
 	return a.registry
 }
 
+// History returns the current conversation history.
+func (a *Agent) History() []llm.Message {
+	return a.history
+}
+
+// LoadHistory replaces the agent's conversation history (e.g., to resume a session).
+// The first message must be a system prompt; if not, it prepends one.
+func (a *Agent) LoadHistory(history []llm.Message) {
+	if len(history) == 0 {
+		return
+	}
+	if history[0].Role != "system" {
+		a.history = append([]llm.Message{{Role: "system", Content: buildSystemPrompt(a.memory)}}, history...)
+	} else {
+		// Replace system prompt with current one (context/memory may have changed)
+		history[0].Content = buildSystemPrompt(a.memory)
+		a.history = history
+	}
+}
+
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s

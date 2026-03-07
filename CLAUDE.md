@@ -47,6 +47,7 @@ context/builtin_skills/ Embedded skill templates (commit, review, explain, fix, 
 memory/memory.go  Project-scoped persistent memory (.gilgamesh/memory.json)
 hooks/hooks.go    Pre/post tool hooks (.gilgamesh/hooks.json)
 session/session.go JSONL session logging
+session/history.go Conversation save/resume (history.json)
 ```
 
 ## Benchmarking
@@ -70,6 +71,7 @@ Bench tool loads profiles from `gilgamesh.json`. Auto-detects `local-ai/bin/llam
 - Hook timeout: 10s. Bash timeout: 120s. Test timeout: 300s.
 - Skills use `{{args}}` placeholder, injected as user message
 - Memory entries persisted to `.gilgamesh/memory.json`, injected into system prompt (~200 token cap)
+- Conversation history saved on /exit, resumable with /resume
 
 ## Commit Conventions
 
