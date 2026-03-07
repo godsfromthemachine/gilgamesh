@@ -17,96 +17,144 @@ Find the ultimate local coding setup: the best model + quantization + inference 
 
 | Model | Size | Quant | Disk | RAM | Status |
 |-------|------|-------|------|-----|--------|
-| Qwen3.5-0.8B | 0.8B | Q4_K_M | 508MB | ~1.5GB | Rejected — too unreliable |
-| Qwen3.5-2B | 2B | Q4_K_M | 1.2GB | ~2.8GB | **Current default** |
-| Qwen3.5-2B | 2B | Q8_0 | 1.9GB | ~3.5GB | Tested — marginal quality gain |
-| Qwen3.5-4B | 4B | Q4_K_M | 2.6GB | ~4.5GB | Available |
-| Qwen3.5-4B | 4B | Q8_0 | 4.2GB | ~5.5GB | **Current heavy** |
-| Qwen3.5-9B | 9B | Q8_0 | 8.9GB | ~10GB | Slow but high quality |
+| Qwen3.5-0.8B | 0.8B | Q4_K_M | 497MB | ~1.5GB | Rejected — too unreliable for agent work |
+| Qwen3.5-2B | 2B | Q4_K_M | 1.18GB | ~2.8GB | **Current default** — sweet spot |
+| Qwen3.5-2B | 2B | Q8_0 | 1.86GB | ~3.5GB | Tested — marginal quality gain, 27% slower |
+| Qwen3.5-4B | 4B | Q4_K_M | 2.54GB | ~4.5GB | Tested — same speed as Q8_0, saves disk |
+| Qwen3.5-4B | 4B | Q8_0 | 4.17GB | ~5.5GB | **Current heavy** — quality ceiling |
+| Qwen3.5-9B | 9B | Q8_0 | 8.9GB | ~10GB | Slow but highest quality |
 
 ## Benchmark Results
 
-### Raw Inference Speed (llama-bench, pp512/tg128, 16 threads)
+### Raw Inference Speed (llama-bench, pp512/tg32, 16 threads)
 
-| Model | PP (tok/s) | TG (tok/s) |
-|-------|-----------|-----------|
-| Qwen3.5-2B Q4_K_M | **181** | **19** |
-| Qwen3.5-2B Q8_0 | 130 | 15 |
-| Qwen3.5-4B Q4_K_M | 95 | 11 |
-| Qwen3.5-4B Q8_0 | 54 | 6.3 |
-| Qwen3.5-9B Q8_0 | 28 | 3.2 |
+Measured 2026-03-06 with gilgamesh bench suite (`go run ./cmd/bench -raw`).
 
-### Agent Response Time (with ~1,600 token overhead)
+| Model | Disk | PP (tok/s) | TG (tok/s) | PP Relative | TG Relative |
+|-------|------|-----------|-----------|-------------|-------------|
+| Qwen3.5-0.8B Q4_K_M | 497MB | **268** | **22.7** | 1.56x | 1.27x |
+| Qwen3.5-2B Q4_K_M | 1.18GB | **172** | **19.2** | 1.00x (baseline) | 1.00x |
+| Qwen3.5-2B Q8_0 | 1.86GB | 132 | 14.1 | 0.77x | 0.74x |
+| Qwen3.5-4B Q4_K_M | 2.54GB | 72 | 7.4 | 0.42x | 0.39x |
+| Qwen3.5-4B Q8_0 | 4.17GB | 72 | 8.0 | 0.42x | 0.42x |
 
-| Model | First Response | Simple Task | Tool Task |
-|-------|---------------|-------------|-----------|
-| 2B Q4_K_M | ~7s | ~10s | ~15s |
-| 4B Q8_0 | ~25s | ~35s | ~60s |
+### Agent Benchmarks (gilgamesh bench suite)
+
+Full agent benchmarks with gilgamesh's ~1,600 token overhead. Measured via `go run ./cmd/bench -all`.
+
+| Model | Minimal Prompt | Tool Call | One-Shot | Edit Task |
+|-------|---------------|-----------|----------|-----------|
+| 2B Q4_K_M | 650-840ms | 3.1-3.4s | 1.1-8.1s | 34-146s (PASS, occasionally FAIL) |
+| 4B Q8_0 | 2.7s | 8.1s | 23s | 156s (PASS, reliable) |
+
+### 4B Q4_K_M vs Q8_0 Comparison (New Finding)
+
+| Metric | 4B Q4_K_M | 4B Q8_0 | Difference |
+|--------|-----------|---------|------------|
+| PP tok/s | 72 | 72 | **Same** |
+| TG tok/s | 7.4 | 8.0 | 8% slower |
+| Disk | 2.54GB | 4.17GB | **39% smaller** |
+
+**Verdict**: At 4B parameter count, Q4_K_M and Q8_0 have nearly identical inference speed on this CPU. The bottleneck is memory bandwidth, not dequantization overhead. Q4_K_M saves 1.6GB disk with negligible speed difference. Quality comparison pending — need to run agent benchmarks to determine if Q8_0's higher precision matters for tool calling reliability.
 
 ## Key Findings
 
 ### 2B Q4_K_M is the sweet spot
-- 181 tok/s prompt processing — fast enough for interactive use
-- 19 tok/s generation — readable streaming output
+- 172 tok/s prompt processing — fast enough for interactive use
+- 19.2 tok/s generation — readable streaming output
 - Tool calling works reliably (glob, read, write, edit, bash)
-- First response in ~7 seconds with gilgamesh's 1,600-token overhead
-- 43% faster prompt processing than 8-thread config
+- First response in ~3-8 seconds with gilgamesh's 1,600-token overhead
+- Edit task passes but occasionally fails (SLM reliability)
 
 ### 0.8B is unusable for agent work
+- Fastest raw inference (268 pp, 22.7 tg) but the speed is wasted
 - Frequent tool call loops (repeated identical calls)
 - Hallucinated tool names and arguments
-- Could not reliably follow multi-step instructions
 - Loop detection triggers constantly
+- Could not reliably follow multi-step instructions
 
 ### 4B Q8_0 is the quality ceiling
 - Significantly better code generation quality
-- Better at complex multi-step tasks and refactoring
-- But 3x slower first response (~25s vs ~7s)
+- More reliable at complex multi-step tasks and refactoring
+- But 2.4x slower first response vs 2B
+- Edit task passes consistently — higher reliability
 - Use for tasks where quality matters more than speed
 
 ### Q4_K_M vs Q8_0 tradeoff
-- Q4_K_M: ~40% faster, marginally lower quality
-- Q8_0: better at edge cases, longer coherent outputs
-- For agent loops (tool calling), Q4_K_M is sufficient
-- For complex code generation, Q8_0 is preferable
+- **2B**: Q4_K_M is 30% faster than Q8_0 — clear win for speed
+- **4B**: Q4_K_M and Q8_0 are nearly identical speed — use Q4_K_M to save disk
+- For agent loops (tool calling), Q4_K_M is sufficient at both sizes
+- For complex code generation, Q8_0 may produce marginally better output
 
 ### Token budget is everything
 - Competitors use 10,000-40,000 token system prompts — unusable on CPU
-- Gilgamesh: ~1,600 tokens total overhead
-- Every 1,000 extra tokens = ~5.5s added latency at 181 tok/s
+- Gilgamesh: ~1,600 tokens total overhead (system ~300, tools ~800, context ~500)
+- Every 1,000 extra tokens = ~5.8s added latency at 172 tok/s
 - Context compaction at 12K tokens keeps interactions responsive
 
 ## Running Benchmarks
 
-Gilgamesh includes a Go benchmark tool:
+Gilgamesh includes a pure Go benchmark suite:
 
 ```bash
 # Build gilgamesh first
 go build -o gilgamesh .
 
-# Benchmark default endpoint
+# Benchmark active profile from config
 go run ./cmd/bench
 
 # Benchmark specific profile
 go run ./cmd/bench -model heavy
 
-# Benchmark all reachable endpoints
+# Benchmark all configured profiles with summary table
 go run ./cmd/bench -all
 
-# Custom endpoint
-go run ./cmd/bench -endpoint http://127.0.0.1:8081/v1
+# Include raw llama-bench metrics (requires llama-bench binary)
+go run ./cmd/bench -raw
 
-# Verbose output
+# JSON output for scripting/tracking
+go run ./cmd/bench -json
+
+# Save results to a JSON log file (appends)
+go run ./cmd/bench -save bench-results.json
+
+# Combine flags
+go run ./cmd/bench -all -raw -save results.json
+
+# Custom endpoint
+go run ./cmd/bench -endpoint http://127.0.0.1:9090/v1
+
+# Verbose output (show errors, raw llama-bench lines)
 go run ./cmd/bench -v
 ```
 
 ### What the benchmark measures
 
 1. **Health check** — endpoint latency
-2. **Minimal prompt** — TTFT + generation speed with tiny prompt
-3. **Tool call** — can the model emit valid tool calls?
-4. **One-shot** — end-to-end gilgamesh `run` with simple question
-5. **Edit task** — full agent loop: create file + edit it (write + edit tools)
+2. **Raw inference** — llama-bench pp/tg tok/s (requires `llama-bench` binary in `local-ai/bin/` or `LLAMA_BENCH` env var)
+3. **Minimal prompt** — TTFT + generation speed with tiny prompt via API
+4. **Tool call** — can the model emit valid tool calls? Measures tool name + call count
+5. **One-shot** — end-to-end gilgamesh `run` with simple question
+6. **Edit task** — full agent loop: create file + edit it (write + edit tools)
+
+### JSON output format
+
+Results can be saved to a JSON log file for historical tracking:
+
+```json
+{
+  "timestamp": "2026-03-06T19:45:00Z",
+  "system": {"cpu": "AMD EPYC-Rome", "cores": 16, "ram": "30Gi"},
+  "profile": "default",
+  "endpoint": "http://127.0.0.1:8081/v1",
+  "health": {"latency_ms": 0, "status": 200},
+  "raw": {"pp_tok_s": 172, "tg_tok_s": 19.2, "threads": 16},
+  "minimal": {"elapsed_ms": 658, "prompt_tokens": 33, "completion_tokens": 8, "tok_per_sec": 12.2},
+  "tool_call": {"elapsed_ms": 3151, "tool_name": "glob", "tool_calls": 1},
+  "one_shot": {"elapsed_ms": 3330},
+  "edit": {"elapsed_ms": 88359, "tool_calls": 6, "pass": true}
+}
+```
 
 ## Inference Server Setup
 
@@ -146,9 +194,28 @@ cmake --build build --config Release -j$(nproc)
 | `--min-p` | 0.0 | No minimum probability threshold |
 | `--chat-template-kwargs` | `{"enable_thinking":false}` | Disable reasoning tokens (saves token budget) |
 
+### Local AI directory structure
+
+For convenience, gilgamesh uses a `local-ai/` directory (gitignored) for model files and binaries:
+
+```
+local-ai/
+├── bin/
+│   ├── llama-bench     # Benchmark binary
+│   ├── llama-server    # Inference server
+│   └── llama-cli       # CLI interface
+└── models/
+    ├── Qwen3.5-0.8B/   # Q4_K_M, Q8_0
+    ├── Qwen3.5-2B/     # Q4_K_M (default), Q8_0
+    ├── Qwen3.5-4B/     # Q4_K_M, Q8_0 (heavy)
+    └── Qwen3.5-9B/     # Q8_0
+```
+
+The bench tool auto-detects these paths. Set `LLAMA_BENCH` and `MODEL_DIR` env vars to override.
+
 ## Model Configuration
 
-Create `gilgamesh.json` in your project root:
+Create `gilgamesh.json` in your project root (see `gilgamesh.example.json`):
 
 ```json
 {
@@ -177,11 +244,14 @@ Switch models mid-session with `/model heavy` or at launch with `-m fast`.
 
 ## Future Trials
 
-- [ ] Qwen3.5-4B Q4_K_M — faster 4B option, quality vs 2B Q4_K_M?
+- [ ] 4B Q4_K_M agent benchmarks — is tool calling reliability same as Q8_0?
 - [ ] IQ4_XS / IQ3_M quants — smaller memory footprint, quality impact?
 - [ ] Context length impact — does shorter ctx-size improve speed?
-- [ ] Thread count tuning — is 16 threads always optimal?
+- [ ] Thread count tuning — is 16 threads always optimal? Test 8, 12, 20
 - [ ] Batch size tuning — effect on prompt processing speed
 - [ ] New model families — Phi-4, Gemma 3, others that fit CPU constraints
 - [ ] Speculative decoding — draft model (0.8B) + verify (4B)?
 - [ ] Multi-model routing — simple tasks → 2B, complex → 4B automatically
+- [ ] 9B Q8_0 agent benchmarks — is the quality worth 5x slowdown?
+- [ ] Flash attention impact on CPU — if llama.cpp supports it
+- [ ] KV cache quantization — reduce memory for longer context

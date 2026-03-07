@@ -163,16 +163,21 @@ curl -N -X POST http://localhost:7777/api/chat -d '{"message": "list all Go file
 
 ## Benchmarking & Model Trials
 
-Gilgamesh includes a Go benchmark tool for trialing local models:
+Gilgamesh includes a pure Go benchmark suite for trialing local models. It loads profiles from `gilgamesh.json`, optionally integrates with llama-bench for raw inference metrics, and supports JSON output for historical tracking.
 
 ```bash
-go run ./cmd/bench              # benchmark default endpoint
-go run ./cmd/bench -all         # benchmark all reachable endpoints
+go run ./cmd/bench              # benchmark active profile from config
+go run ./cmd/bench -all         # benchmark all profiles with summary table
 go run ./cmd/bench -model heavy # benchmark specific profile
-go run ./cmd/bench -v           # verbose output
+go run ./cmd/bench -raw         # include raw llama-bench pp/tg metrics
+go run ./cmd/bench -json        # JSON output for scripting
+go run ./cmd/bench -save r.json # append results to JSON log file
+go run ./cmd/bench -all -raw -save results.json  # full trial run
 ```
 
-Measures health latency, minimal prompt speed, tool call parsing, one-shot agent response, and full edit task quality. See [TRIALS.md](TRIALS.md) for detailed results, findings, and the ongoing quest for the optimal local coding setup.
+Measures 6 dimensions: health latency, raw inference speed (pp/tg tok/s), minimal prompt, tool call parsing, one-shot agent response, and full edit task quality.
+
+See [TRIALS.md](TRIALS.md) for detailed results, findings, and the ongoing quest for the optimal local coding setup.
 
 ## Architecture
 
@@ -198,11 +203,12 @@ gilgamesh/
 │   └── server.go     # MCP stdio server
 ├── server/
 │   └── server.go     # HTTP API server
-├── cmd/bench/        # Model benchmark tool (Go)
-├── config/           # JSON config loader
-├── context/          # Project context + skills
+├── cmd/bench/        # Benchmark suite (Go): raw, API, agent, edit trials
+├── config/           # JSON config loader (model profiles, tool permissions)
+├── context/          # Project context + skills (6 built-in via go:embed)
 ├── hooks/            # Pre/post tool execution hooks
-└── session/          # JSONL session logging
+├── session/          # JSONL session logging
+└── local-ai/         # (gitignored) llama.cpp binaries + GGUF models
 ```
 
 ## License

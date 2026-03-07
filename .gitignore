@@ -24,8 +24,8 @@ go.work
 # Runtime logs
 *.log
 
-# Model files (too large for git)
-models/
+# Local AI infrastructure (models, binaries — per-machine setup)
+local-ai/
 
-# llama.cpp build (build locally)
-llama.cpp/
+# Config files (contain machine-specific endpoints)
+gilgamesh.json

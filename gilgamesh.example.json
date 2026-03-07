@@ -1,0 +1,20 @@
+{
+  "models": {
+    "fast": {
+      "name": "qwen3.5-2b",
+      "endpoint": "http://127.0.0.1:8081/v1",
+      "api_key": "sk-local"
+    },
+    "default": {
+      "name": "qwen3.5-2b",
+      "endpoint": "http://127.0.0.1:8081/v1",
+      "api_key": "sk-local"
+    },
+    "heavy": {
+      "name": "qwen3.5-4b",
+      "endpoint": "http://127.0.0.1:8080/v1",
+      "api_key": "sk-local"
+    }
+  },
+  "active_model": "default"
+}

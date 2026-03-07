@@ -51,12 +51,15 @@ session/session.go JSONL session logging
 ## Benchmarking
 
 ```bash
-go run ./cmd/bench              # bench default endpoint
-go run ./cmd/bench -all         # bench all profiles
+go run ./cmd/bench              # bench active profile from config
+go run ./cmd/bench -all         # bench all profiles + summary table
 go run ./cmd/bench -model heavy # bench specific profile
+go run ./cmd/bench -raw         # include raw llama-bench pp/tg metrics
+go run ./cmd/bench -json        # JSON output for scripting
+go run ./cmd/bench -save r.json # append results to JSON log file
 ```
 
-See `TRIALS.md` for model trialing results and findings.
+Bench tool loads profiles from `gilgamesh.json`. Auto-detects `local-ai/bin/llama-bench` and `local-ai/models/` for raw metrics. See `TRIALS.md` for model trialing results and findings.
 
 ## Key Behaviors
 
