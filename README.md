@@ -12,20 +12,31 @@
 
 ## What is this?
 
-Gilgamesh is an interactive CLI agent that connects to a local llama.cpp server (or any OpenAI-compatible endpoint) and provides tool-calling capabilities for software engineering tasks. It's designed to run on CPU with small models (Qwen3.5 2B/4B) by keeping total prompt overhead under ~1,500 tokens.
+Gilgamesh is an interactive CLI agent that connects to a local llama.cpp server (or any OpenAI-compatible endpoint) and provides tool-calling capabilities for software engineering tasks. It's designed to run on CPU with small models (Qwen3.5 2B/4B) by keeping total prompt overhead under ~1,600 tokens.
 
 Features:
 - **7 built-in tools**: read, write, edit, bash, grep, glob, test
 - **Multi-language testing**: auto-detects Go, Python, Rust, Zig, Node.js projects
 - **Configurable tool permissions**: whitelist/blacklist tools per project via config
+- **Custom tool registration**: define project-specific tools in `.gilgamesh/tools.json`
 - **Streaming SSE**: tokens stream to terminal as they arrive
 - **Multi-model profiles**: switch between fast/default/heavy models mid-session
-- **Skills system**: reusable prompt templates (`.gilgamesh/skills/*.md`)
+- **Skills system**: 7 built-in skills + reusable prompt templates (`.gilgamesh/skills/*.md`)
 - **Hook system**: pre/post tool execution hooks (`.gilgamesh/hooks.json`)
 - **Session logging**: JSONL session logs with distill summaries
+- **Memory persistence**: project-scoped facts that persist across sessions (`.gilgamesh/memory.json`)
+- **Conversation history**: save and resume previous sessions (`/resume`, `/sessions`)
 - **Loop detection**: detects and breaks out of repeated tool calls
 - **Context compaction**: automatically trims old tool results to stay within context limits
 - **Shell completion**: bash, zsh, fish (`gilgamesh completion bash`)
+- **TDD-first**: system prompt promotes writing tests before implementation
+- **Graceful Ctrl+C**: cancel in-progress requests, double-Ctrl+C force quits
+- **Error classification**: network, auth, timeout, LLM errors with recovery hints
+- **Markdown rendering**: headers, bold/italic, lists, blockquotes, code blocks with syntax highlighting
+- **Context gauge**: visual progress bar showing context pressure (`/status`)
+- **Config validation**: startup warnings for invalid endpoints or missing models
+- **Environment variable overrides**: GILGAMESH_ACTIVE_MODEL, GILGAMESH_ENDPOINT, etc.
+- **Accessible NoColor**: text fallbacks for all Unicode icons when color is disabled
 
 ## Quick start
 
@@ -108,10 +119,18 @@ Invoke with `/skillname` or `/skillname args here`.
 |---------|-------------|
 | `/model [fast\|default\|heavy]` | Switch model |
 | `/clear` | Reset conversation context |
-| `/skills` | List available skills |
 | `/tokens` | Show estimated context size |
+| `/status` | Show model, context gauge, tools, skills, memories |
+| `/config` | Show model configuration with all profiles |
+| `/skills` | List available skills |
+| `/remember <fact>` | Remember a fact across sessions |
+| `/forget <n\|text>` | Forget by number or matching text |
+| `/memory` | List remembered facts |
+| `/resume [path]` | Resume a previous conversation |
+| `/sessions` | List recent saved sessions |
 | `/session` | Show session log path |
 | `/distill [path]` | Summarize a session |
+| `/help` | Show all commands |
 | `/exit` | Quit |
 
 ## MCP Server
@@ -164,6 +183,21 @@ curl -X POST http://localhost:7777/api/tools/read -d '{"path": "main.go"}'
 curl -N -X POST http://localhost:7777/api/chat -d '{"message": "list all Go files"}'
 ```
 
+## Environment variables
+
+Override config values without editing `gilgamesh.json`:
+
+| Variable | Description |
+|----------|-------------|
+| `GILGAMESH_ACTIVE_MODEL` | Override active model profile (fast, default, heavy) |
+| `GILGAMESH_ENDPOINT` | Override endpoint URL for the active model |
+| `GILGAMESH_API_KEY` | Override API key for the active model |
+| `GILGAMESH_MODEL_NAME` | Override model name for the active model |
+
+```bash
+GILGAMESH_ACTIVE_MODEL=heavy ./gilgamesh run "complex task"
+```
+
 ## Benchmarking & Model Trials
 
 Gilgamesh includes a pure Go benchmark suite for trialing local models. It loads profiles from `gilgamesh.json`, optionally integrates with llama-bench for raw inference metrics, and supports JSON output for historical tracking.
@@ -180,7 +214,16 @@ go run ./cmd/bench -all -raw -save results.json  # full trial run
 
 Measures 6 dimensions: health latency, raw inference speed (pp/tg tok/s), minimal prompt, tool call parsing, one-shot agent response, and full edit task quality.
 
-See [TRIALS.md](TRIALS.md) for detailed results, findings, and the ongoing quest for the optimal local coding setup.
+See [TRIALS.md](TRIALS.md) for detailed results and the ongoing quest for the optimal local coding setup. See [docs/TRIAL_METHODOLOGY.md](docs/TRIAL_METHODOLOGY.md) for the controlled trial protocol.
+
+### Key Findings
+
+| Model | PP (tok/s) | TG (tok/s) | First Response | Verdict |
+|-------|-----------|-----------|---------------|---------|
+| Qwen3.5-2B Q4_K_M | 181 | 19 | ~7s | **Sweet spot** — default |
+| Qwen3.5-4B Q4_K_M | 72 | 7.4 | ~20s | Quality ceiling — heavy |
+| Qwen3.5-0.8B | — | — | — | Rejected — too unreliable |
+| Qwen3.5-9B Q8_0 | 30 | 5.7 | — | Not worth it — same efficiency as 4B, 40-70% slower |
 
 ## Architecture
 
@@ -200,19 +243,52 @@ gilgamesh/
 │   ├── bash.go       # Shell command execution
 │   ├── grep.go       # Content search
 │   ├── glob.go       # File pattern matching
-│   └── test.go       # Multi-language test runner (Go, Python, Rust, Zig, Node)
+│   ├── test.go       # Multi-language test runner
+│   └── custom.go     # Custom tool loading (.gilgamesh/tools.json)
+├── ui/
+│   ├── color.go      # Terminal color profile detection (NO_COLOR, CLICOLOR, TTY)
+│   ├── style.go      # Semantic ANSI styles + accessible icon functions
+│   ├── spinner.go    # Animated progress indicator with elapsed time
+│   ├── markdown.go   # Streaming markdown renderer (code blocks, headers, lists)
+│   ├── table.go      # Auto-sized columnar table output
+│   ├── gauge.go      # Text progress bars with color thresholds
+│   ├── errors.go     # Error classification with recovery hints
+│   └── command.go    # Slash command registry with category grouping
 ├── mcp/
 │   ├── protocol.go   # JSON-RPC 2.0 + MCP protocol types
 │   └── server.go     # MCP stdio server
 ├── server/
 │   └── server.go     # HTTP API server
-├── cmd/bench/        # Benchmark suite (Go): raw, API, agent, edit trials
-├── config/           # JSON config loader (model profiles, tool permissions)
+├── config/           # JSON config loader (model profiles, tool permissions, env overrides)
 ├── context/          # Project context + skills (7 built-in via go:embed)
 ├── hooks/            # Pre/post tool execution hooks
-├── session/          # JSONL session logging
+├── memory/           # Project-scoped persistent memory
+├── session/          # JSONL session logging + conversation history
+├── cmd/bench/        # Go model benchmark suite (6-stage pipeline)
 └── local-ai/         # (gitignored) llama.cpp binaries + GGUF models
 ```
+
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [LOCAL_AI_SETUP.md](LOCAL_AI_SETUP.md) | llama.cpp setup, model downloads, server configuration |
+| [docs/CONTEXT_GUIDE.md](docs/CONTEXT_GUIDE.md) | Project context files, custom tools, memory usage |
+| [TRIALS.md](TRIALS.md) | Model benchmark results and key findings |
+| [docs/TRIAL_METHODOLOGY.md](docs/TRIAL_METHODOLOGY.md) | Controlled trial protocol and reproducibility |
+
+## Token Budget
+
+The critical constraint for CPU inference:
+
+| Component | Tokens |
+|-----------|--------|
+| System prompt | ~300 |
+| 7 tool definitions | ~800 |
+| Project context | ~500 (capped) |
+| **Total overhead** | **~1,600** |
+
+At ~160 tok/s prompt processing (Qwen3.5-2B Q4_K_M, 12 threads), the first response arrives in ~10 seconds on CPU.
 
 ## License
 

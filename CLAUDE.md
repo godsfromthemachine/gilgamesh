@@ -30,20 +30,29 @@ go test ./... -v -cover      # run all tests
 - **Each tool is a file.** `tools/newtool.go` returns `*Tool` with `Name`, `Description`, `Parameters` (JSON Schema), `Execute` (closure).
 - **Custom tools** defined in `.gilgamesh/tools.json` — shell commands with `{{param}}` template substitution and `GILGAMESH_<PARAM>` env vars.
 - **All three interfaces share one registry.** CLI, MCP, and HTTP all use `tools.Registry`. No capability is exclusive to any interface.
-- **Version is in `main.go`.** Constant `version = "0.5.0"`.
+- **Version is in `main.go`.** Constant `version = "0.6.0"`.
 
 ## Project Structure
 
 ```
-main.go           CLI entry, REPL, subcommand dispatch
+main.go           CLI entry, REPL, subcommand dispatch (command registry pattern)
 agent/agent.go    Core loop: prompt → LLM → tool calls → repeat (max 15 loops)
+                  Run()/RunWithContext() for CLI, RunWithEvents() for HTTP
 agent/prompt.go   System prompt (~300 tokens, TDD-first)
-llm/client.go     OpenAI-compatible streaming SSE client
+llm/client.go     OpenAI-compatible streaming SSE client (StreamChat/StreamChatWithContext)
 tools/registry.go Tool registration + dispatch; tools/*.go = 7 built-in tools
 tools/custom.go   Custom tool loading (.gilgamesh/tools.json) + execution
+ui/color.go       Terminal color profile detection (NO_COLOR, CLICOLOR, COLORTERM, TTY)
+ui/style.go       Semantic ANSI styles + accessible icon functions (NoColor fallbacks)
+ui/spinner.go     Animated progress indicator with elapsed time display
+ui/markdown.go    Streaming markdown renderer (code blocks, headers, lists, blockquotes)
+ui/table.go       Auto-sized columnar table output
+ui/gauge.go       Text progress bars with color thresholds
+ui/errors.go      Error classification with recovery hints (GilgaError)
+ui/command.go     Slash command registry with category grouping
 mcp/protocol.go   JSON-RPC 2.0 types; mcp/server.go = MCP stdio server
 server/server.go  HTTP API: /api/health, /api/tools, /api/tools/{name}, /api/chat (SSE)
-config/config.go  Model profiles (fast/default/heavy)
+config/config.go  Model profiles (fast/default/heavy), validation, env var overrides
 context/context.go Project context + skills (7 built-in + project-local)
 context/builtin_skills/ Embedded skill templates (commit, review, explain, fix, refactor, doc, tdd)
 memory/memory.go  Project-scoped persistent memory (.gilgamesh/memory.json)
