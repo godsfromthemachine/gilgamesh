@@ -44,6 +44,7 @@ server/server.go  HTTP API: /api/health, /api/tools, /api/tools/{name}, /api/cha
 config/config.go  Model profiles (fast/default/heavy)
 context/context.go Project context + skills (6 built-in + project-local)
 context/builtin_skills/ Embedded skill templates (commit, review, explain, fix, refactor, doc)
+memory/memory.go  Project-scoped persistent memory (.gilgamesh/memory.json)
 hooks/hooks.go    Pre/post tool hooks (.gilgamesh/hooks.json)
 session/session.go JSONL session logging
 ```
@@ -68,6 +69,7 @@ Bench tool loads profiles from `gilgamesh.json`. Auto-detects `local-ai/bin/llam
 - Pre-hooks can block tool execution; post-hooks observe only
 - Hook timeout: 10s. Bash timeout: 120s. Test timeout: 300s.
 - Skills use `{{args}}` placeholder, injected as user message
+- Memory entries persisted to `.gilgamesh/memory.json`, injected into system prompt (~200 token cap)
 
 ## Commit Conventions
 

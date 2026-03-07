@@ -11,7 +11,7 @@ Find the ultimate local coding setup: the best model + quantization + inference 
 - **CPU**: AMD EPYC-Rome 16-core @ 2.0GHz
 - **RAM**: 30GB
 - **GPU**: None
-- **Inference**: llama.cpp (CPU-only, AVX2, 16 threads)
+- **Inference**: llama.cpp (CPU-only, AVX2, 12 threads optimal)
 
 ## Models Under Test
 
@@ -22,7 +22,7 @@ Find the ultimate local coding setup: the best model + quantization + inference 
 | Qwen3.5-2B | 2B | Q8_0 | 1.86GB | ~3.5GB | Tested — marginal quality gain, 27% slower |
 | Qwen3.5-4B | 4B | Q4_K_M | 2.54GB | ~4.5GB | Tested — same speed as Q8_0, saves disk |
 | Qwen3.5-4B | 4B | Q8_0 | 4.17GB | ~5.5GB | **Current heavy** — quality ceiling |
-| Qwen3.5-9B | 9B | Q8_0 | 8.9GB | ~10GB | Slow but highest quality |
+| Qwen3.5-9B | 9B | Q8_0 | 8.9GB | ~10GB | **Not worth it** — same efficiency as 4B, 40-70% slower |
 
 ## Benchmark Results
 
@@ -181,11 +181,11 @@ Gilgamesh works with any OpenAI-compatible API. The reference setup uses llama.c
 cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=OFF
 cmake --build build --config Release -j$(nproc)
 
-# Serve 2B model (fast/default) — 12 threads optimal (NOT 16)
+# Serve 2B model (fast/default) — 12 threads, b=256 optimal
 ./llama-server \
     --model Qwen3.5-2B-Q4_K_M.gguf \
     --port 8081 --host 127.0.0.1 \
-    --ctx-size 16384 --threads 12 \
+    --ctx-size 16384 --threads 12 --batch-size 256 \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \
     --chat-template-kwargs '{"enable_thinking":false}'
 
@@ -193,7 +193,7 @@ cmake --build build --config Release -j$(nproc)
 ./llama-server \
     --model Qwen3.5-4B-Q4_K_M.gguf \
     --port 8080 --host 127.0.0.1 \
-    --ctx-size 16384 --threads 12 \
+    --ctx-size 16384 --threads 12 --batch-size 256 \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \
     --chat-template-kwargs '{"enable_thinking":false}'
 ```
@@ -204,6 +204,7 @@ cmake --build build --config Release -j$(nproc)
 |-----------|-------|-----------|
 | `--ctx-size` | 16384 | Covers agent needs (12K compaction threshold), saves ~500MB vs 65K |
 | `--threads` | 12 | Optimal on 16-core EPYC — 30% better TG than 16 threads |
+| `--batch-size` | 256 | Optimal for PP; b=512 regresses due to cache pressure |
 | `--temp` | 0.6 | Low temperature for deterministic tool calls |
 | `--top-p` | 0.95 | Nucleus sampling for coherent output |
 | `--top-k` | 20 | Narrow vocabulary for focused generation |
@@ -285,6 +286,62 @@ Tested with all servers stopped, clean CPU, 2 runs averaged. Results are consist
 - Root cause: at 16 threads, thread contention and NUMA overhead outweigh parallelism for the sequential token generation workload
 - **Recommendation**: Use `--threads 12` instead of `--threads 16` for all server profiles
 
+### Batch Size Tuning (New Finding)
+
+Tested with llama-bench at 12 threads, pp512/tg32, 2 runs averaged. Batch size (`-b`) controls how many tokens are processed simultaneously during prompt evaluation.
+
+**Qwen3.5-2B Q4_K_M:**
+
+| Batch Size | PP (tok/s) | TG (tok/s) | PP vs b=512 |
+|-----------|-----------|-----------|-------------|
+| 32 | 120.8 | 20.3 | 77% |
+| 64 | 146.6 | 21.2 | 93% |
+| 128 | 153.1 | 21.7 | 97% |
+| **256** | **160.1** | **22.1** | **102%** |
+| 512 | 157.4 | 20.2 | baseline |
+
+**Qwen3.5-4B Q4_K_M:**
+
+| Batch Size | PP (tok/s) | TG (tok/s) | PP vs b=512 |
+|-----------|-----------|-----------|-------------|
+| 32 | 52.3 | 9.4 | 81% |
+| 64 | 62.5 | 9.4 | 97% |
+| 128 | 63.2 | 9.5 | 98% |
+| **256** | **65.6** | **9.6** | **102%** |
+| 512 | 64.5 | 9.0 | baseline |
+
+**Key findings:**
+- **b=256 is optimal** for both model sizes — 2-3% faster PP than b=512
+- **b=512 actually regresses** on both PP and TG (cache pressure)
+- b=32 is 20-25% slower — too small for efficient SIMD utilization
+- **TG is also affected** — b=256 gives 9% better TG than b=512 on 2B
+- **Recommendation**: Use `--batch-size 256` for llama-server
+
+### 9B Q8_0 Agent Benchmarks (New Finding)
+
+Tested with llama-server at 12 threads, ctx-size 16384, b=256. The question: is 9B quality worth the slowdown?
+
+**Raw inference:**
+
+| Model | PP (tok/s) | TG (tok/s) | PP vs 2B | TG vs 2B |
+|-------|-----------|-----------|----------|----------|
+| 2B Q4_K_M | 160.1 | 22.1 | 1.00x | 1.00x |
+| 4B Q4_K_M | 65.6 | 9.6 | 0.41x | 0.43x |
+| 9B Q8_0 | 30.3 | 5.7 | 0.19x | 0.26x |
+
+**Agent benchmarks:**
+
+| Metric | 2B Q4_K_M | 4B Q4_K_M | 9B Q8_0 |
+|--------|-----------|-----------|---------|
+| Minimal prompt | 650-840ms | 1.7-1.8s | 2.2s |
+| Tool call | 3.1-3.4s | 7.5s | 12.5s |
+| One-shot | 1-8s | ~20s | 42.3s |
+| Edit task time | 34-146s | 60-96s | 132s |
+| Edit tool calls | 3-9 | 2 | 2 |
+| Edit reliability | PASS (flaky) | PASS | PASS |
+
+**Verdict**: 9B is **not worth it** on this CPU. It produces the same 2-tool-call efficiency as 4B but takes 40-70% longer. The one-shot response at 42s and TG of 5.7 tok/s makes interactive use painful. The 4B Q4_K_M remains the best quality/speed tradeoff for heavy tasks.
+
 ### Dual-Model Serving Optimization
 
 With 12 threads optimal for single-model serving, this opens the possibility of running **two models simultaneously** on 16 cores (e.g., 8 threads each) for multi-model routing:
@@ -319,10 +376,10 @@ Gilgamesh compacts context at ~12K tokens, so 65536 ctx is rarely needed. Testin
 - [ ] IQ4_XS / IQ3_M quants — smaller memory footprint, quality impact?
 - [x] ~~Context length impact~~ — DONE: 65K ctx adds 672MB RAM, 16K sufficient for agent
 - [x] ~~Thread count tuning~~ — DONE: 12 threads optimal on 16-core EPYC
-- [ ] Batch size tuning — effect on prompt processing speed
+- [x] ~~Batch size tuning~~ — DONE: b=256 optimal, b=512 regresses (cache pressure)
+- [x] ~~9B Q8_0 agent benchmarks~~ — DONE: not worth it, same efficiency as 4B but 40-70% slower
 - [ ] New model families — Phi-4, Gemma 3, others that fit CPU constraints
 - [ ] Speculative decoding — draft model (0.8B) + verify (4B)?
 - [ ] Multi-model routing — simple tasks → 2B, complex → 4B automatically
-- [ ] 9B Q8_0 agent benchmarks — is the quality worth 5x slowdown?
 - [ ] Flash attention impact on CPU — if llama.cpp supports it
 - [ ] KV cache quantization — reduce memory for longer context

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/godsfromthemachine/gilgamesh/hooks"
 	"github.com/godsfromthemachine/gilgamesh/llm"
 	"github.com/godsfromthemachine/gilgamesh/mcp"
+	"github.com/godsfromthemachine/gilgamesh/memory"
 	"github.com/godsfromthemachine/gilgamesh/server"
 	"github.com/godsfromthemachine/gilgamesh/session"
 	"github.com/godsfromthemachine/gilgamesh/tools"
@@ -107,7 +109,7 @@ func main() {
 		sessLog := session.NewLogger()
 		defer sessLog.Close()
 
-		ag := agent.New(client, hookReg, sessLog)
+		ag := agent.New(client, hookReg, sessLog, nil)
 		ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 		registry := ag.Registry()
 
@@ -125,7 +127,10 @@ func main() {
 	sessLog := session.NewLogger()
 	defer sessLog.Close()
 
-	ag := agent.New(client, hookReg, sessLog)
+	mem := memory.NewStore(".gilgamesh/memory.json")
+	mem.Load() // best-effort — missing file is fine
+
+	ag := agent.New(client, hookReg, sessLog, mem)
 	ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 	skills := gilgacontext.LoadSkills()
 
@@ -145,6 +150,9 @@ func main() {
 		} else {
 			fmt.Printf("\033[90m%d skills available (%d built-in)\033[0m\n", len(skills), builtin)
 		}
+	}
+	if len(mem.Entries) > 0 {
+		fmt.Printf("\033[90m%d memories loaded\033[0m\n", len(mem.Entries))
 	}
 
 	// One-shot mode
@@ -214,7 +222,7 @@ func main() {
 			fmt.Printf("\033[90mSwitched to %s (%s)\033[0m\n", cfg.ActiveModel, model.Name)
 			continue
 		case input == "/help":
-			fmt.Println("\033[90mCommands: /model, /clear, /tokens, /skills, /session, /distill, /exit, /help\033[0m")
+			fmt.Println("\033[90mCommands: /model, /clear, /tokens, /skills, /memory, /remember, /forget, /session, /distill, /exit, /help\033[0m")
 			continue
 		case input == "/tokens":
 			fmt.Printf("\033[90mEstimated context: ~%d tokens\033[0m\n", ag.EstimateTokens())
@@ -228,6 +236,37 @@ func main() {
 				fmt.Printf("\033[90mLogging to: %s\033[0m\n", p)
 			} else {
 				fmt.Println("\033[90mNo active session log.\033[0m")
+			}
+			continue
+		case input == "/memory":
+			fmt.Print("\033[90m" + mem.FormatList() + "\033[0m")
+			continue
+		case strings.HasPrefix(input, "/remember "):
+			fact := strings.TrimPrefix(input, "/remember ")
+			mem.Add(fact)
+			if err := mem.Save(); err != nil {
+				fmt.Printf("\033[31msave error: %s\033[0m\n", err)
+			} else {
+				fmt.Printf("\033[90mRemembered (%d total)\033[0m\n", len(mem.Entries))
+			}
+			continue
+		case strings.HasPrefix(input, "/forget "):
+			arg := strings.TrimPrefix(input, "/forget ")
+			if n, err := strconv.Atoi(arg); err == nil {
+				if mem.Remove(n - 1) {
+					mem.Save()
+					fmt.Printf("\033[90mForgot entry %d (%d remaining)\033[0m\n", n, len(mem.Entries))
+				} else {
+					fmt.Printf("\033[90mNo entry #%d\033[0m\n", n)
+				}
+			} else {
+				removed := mem.RemoveByContent(arg)
+				if removed > 0 {
+					mem.Save()
+					fmt.Printf("\033[90mForgot %d entries matching %q (%d remaining)\033[0m\n", removed, arg, len(mem.Entries))
+				} else {
+					fmt.Printf("\033[90mNo memories matching %q\033[0m\n", arg)
+				}
 			}
 			continue
 		case strings.HasPrefix(input, "/distill"):
@@ -297,6 +336,9 @@ Interactive commands:
   /model [fast|default|heavy]  Switch model
   /clear                       Reset context
   /skills                      List available skills
+  /memory                      List remembered facts
+  /remember <fact>             Remember a fact across sessions
+  /forget <n|text>             Forget by number or matching text
   /tokens                      Show context token estimate
   /session                     Show session log path
   /distill [path]              Summarize session for skill extraction
@@ -305,6 +347,7 @@ Interactive commands:
 
 Configuration:
   .gilgameshfile                 Project context (loaded into system prompt)
+  .gilgamesh/memory.json         Persistent memory (managed via /remember)
   .gilgamesh/skills/*.md         Project-local skills
   .gilgamesh/hooks.json          Tool execution hooks
   ~/.config/gilgamesh/skills/    Global skills

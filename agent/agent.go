@@ -9,6 +9,7 @@ import (
 	gilgacontext "github.com/godsfromthemachine/gilgamesh/context"
 	"github.com/godsfromthemachine/gilgamesh/hooks"
 	"github.com/godsfromthemachine/gilgamesh/llm"
+	"github.com/godsfromthemachine/gilgamesh/memory"
 	"github.com/godsfromthemachine/gilgamesh/session"
 	"github.com/godsfromthemachine/gilgamesh/tools"
 )
@@ -24,43 +25,51 @@ type Agent struct {
 	history  []llm.Message
 	hooks    *hooks.Registry
 	session  *session.Logger
+	memory   *memory.Store
 }
 
-func New(client *llm.Client, hookReg *hooks.Registry, sessLog *session.Logger) *Agent {
+func New(client *llm.Client, hookReg *hooks.Registry, sessLog *session.Logger, mem *memory.Store) *Agent {
 	return &Agent{
 		client:   client,
 		registry: tools.NewRegistry(),
 		history: []llm.Message{
-			{Role: "system", Content: buildSystemPrompt()},
+			{Role: "system", Content: buildSystemPrompt(mem)},
 		},
 		hooks:   hookReg,
 		session: sessLog,
+		memory:  mem,
 	}
 }
 
-// buildSystemPrompt combines the base prompt with project context.
-func buildSystemPrompt() string {
+// buildSystemPrompt combines the base prompt with project context and memory.
+func buildSystemPrompt(mem *memory.Store) string {
 	base := SystemPrompt()
+
 	projectCtx := gilgacontext.Load()
-	if projectCtx == "" {
-		return base
+	if projectCtx != "" {
+		tokens := gilgacontext.TokenEstimate(projectCtx)
+		if tokens > 500 {
+			runes := []rune(projectCtx)
+			if len(runes) > 2000 {
+				projectCtx = string(runes[:2000]) + "\n...(truncated)"
+			}
+		}
+		base += "\n\nProject context:\n" + projectCtx
 	}
 
-	tokens := gilgacontext.TokenEstimate(projectCtx)
-	if tokens > 500 {
-		// Truncate project context to ~500 tokens to stay lean
-		runes := []rune(projectCtx)
-		if len(runes) > 2000 {
-			projectCtx = string(runes[:2000]) + "\n...(truncated)"
+	if mem != nil {
+		memPrompt := mem.FormatForPrompt()
+		if memPrompt != "" {
+			base += "\n\n" + memPrompt
 		}
 	}
 
-	return base + "\n\nProject context:\n" + projectCtx
+	return base
 }
 
 func (a *Agent) ClearHistory() {
 	a.history = []llm.Message{
-		{Role: "system", Content: buildSystemPrompt()},
+		{Role: "system", Content: buildSystemPrompt(a.memory)},
 	}
 }
 
