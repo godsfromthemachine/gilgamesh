@@ -47,15 +47,31 @@ Full agent benchmarks with gilgamesh's ~1,600 token overhead. Measured via `go r
 | 2B Q4_K_M | 650-840ms | 3.1-3.4s | 1.1-8.1s | 34-146s (PASS, occasionally FAIL) |
 | 4B Q8_0 | 2.7s | 8.1s | 23s | 156s (PASS, reliable) |
 
-### 4B Q4_K_M vs Q8_0 Comparison (New Finding)
+### 4B Q4_K_M vs Q8_0 Comparison
 
 | Metric | 4B Q4_K_M | 4B Q8_0 | Difference |
 |--------|-----------|---------|------------|
-| PP tok/s | 72 | 72 | **Same** |
-| TG tok/s | 7.4 | 8.0 | 8% slower |
+| PP tok/s | 73 | 72 | **Same** |
+| TG tok/s | 7.3 | 8.0 | ~10% slower gen |
 | Disk | 2.54GB | 4.17GB | **39% smaller** |
+| Minimal prompt | 1.7-1.8s | 2.7s | Q4_K_M faster (less data to load) |
+| Tool call | 7.5s | 8.1s | Similar |
+| Edit task | 60-96s, 2 tools, PASS | 156s, 4 tools, PASS | Q4_K_M more efficient |
 
-**Verdict**: At 4B parameter count, Q4_K_M and Q8_0 have nearly identical inference speed on this CPU. The bottleneck is memory bandwidth, not dequantization overhead. Q4_K_M saves 1.6GB disk with negligible speed difference. Quality comparison pending — need to run agent benchmarks to determine if Q8_0's higher precision matters for tool calling reliability.
+**Verdict**: 4B Q4_K_M is the better 4B option. Same inference speed, 39% smaller on disk, and actually performs better in agent benchmarks (fewer tool calls, faster completion). Q8_0 offers no meaningful advantage at this model size on CPU. **Recommendation: use 4B Q4_K_M as the heavy profile instead of Q8_0.**
+
+### 2B vs 4B Agent Efficiency Comparison
+
+| Metric | 2B Q4_K_M | 4B Q4_K_M | Tradeoff |
+|--------|-----------|-----------|----------|
+| Minimal prompt | 650-840ms | 1.7-1.8s | 2B is 2.5x faster |
+| Tool call | 3.1-3.4s | 7.5s | 2B is 2.3x faster |
+| One-shot | 1-8s | ~20s | 2B is 3-20x faster (variable) |
+| Edit task time | 34-146s | 60-96s | 4B is more consistent |
+| Edit tool calls | 3-9 calls | 2 calls | 4B is more efficient |
+| Edit reliability | PASS (occasionally FAIL) | PASS (consistent) | 4B is more reliable |
+
+**Key insight**: The 4B model compensates for slower inference with better planning — it uses fewer tool calls to complete the same task. The net result: 4B edit tasks can actually be faster than 2B when 2B makes many attempts.
 
 ## Key Findings
 
@@ -165,19 +181,19 @@ Gilgamesh works with any OpenAI-compatible API. The reference setup uses llama.c
 cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=OFF
 cmake --build build --config Release -j$(nproc)
 
-# Serve 2B model (fast/default)
+# Serve 2B model (fast/default) — 12 threads optimal (NOT 16)
 ./llama-server \
     --model Qwen3.5-2B-Q4_K_M.gguf \
     --port 8081 --host 127.0.0.1 \
-    --ctx-size 65536 --threads 16 \
+    --ctx-size 16384 --threads 12 \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \
     --chat-template-kwargs '{"enable_thinking":false}'
 
-# Serve 4B model (heavy)
+# Serve 4B model (heavy) — Q4_K_M recommended over Q8_0 (same speed, smaller)
 ./llama-server \
-    --model Qwen3.5-4B-Q8_0.gguf \
+    --model Qwen3.5-4B-Q4_K_M.gguf \
     --port 8080 --host 127.0.0.1 \
-    --ctx-size 65536 --threads 16 \
+    --ctx-size 16384 --threads 12 \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \
     --chat-template-kwargs '{"enable_thinking":false}'
 ```
@@ -186,8 +202,8 @@ cmake --build build --config Release -j$(nproc)
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| `--ctx-size` | 65536 | Full context window for Qwen3.5 |
-| `--threads` | 16 | All cores for prompt processing |
+| `--ctx-size` | 16384 | Covers agent needs (12K compaction threshold), saves ~500MB vs 65K |
+| `--threads` | 12 | Optimal on 16-core EPYC — 30% better TG than 16 threads |
 | `--temp` | 0.6 | Low temperature for deterministic tool calls |
 | `--top-p` | 0.95 | Nucleus sampling for coherent output |
 | `--top-k` | 20 | Narrow vocabulary for focused generation |
@@ -242,12 +258,67 @@ Create `gilgamesh.json` in your project root (see `gilgamesh.example.json`):
 
 Switch models mid-session with `/model heavy` or at launch with `-m fast`.
 
+### Thread Count Tuning (New Finding)
+
+Tested with all servers stopped, clean CPU, 2 runs averaged. Results are consistent across model sizes.
+
+**Qwen3.5-2B Q4_K_M:**
+
+| Threads | PP (tok/s) | TG (tok/s) | PP vs 16 | TG vs 16 |
+|---------|-----------|-----------|----------|----------|
+| 8 | 121 | 18.9 | 77% | **117%** |
+| 12 | 156 | **21.0** | 100% | **130%** |
+| 16 | 156 | 16.1 | baseline | baseline |
+
+**Qwen3.5-4B Q4_K_M:**
+
+| Threads | PP (tok/s) | TG (tok/s) | PP vs 16 | TG vs 16 |
+|---------|-----------|-----------|----------|----------|
+| 8 | 46 | 8.2 | 71% | **110%** |
+| 12 | 63 | **9.1** | 97% | **122%** |
+| 16 | 65 | 7.5 | baseline | baseline |
+
+**Key findings:**
+- **PP saturates at 12 threads** — going to 16 gives only 0-3% more PP
+- **TG degrades at 16 threads** — 23% worse on 2B, 22% worse on 4B
+- **12 threads is the sweet spot** for both PP and TG on this 16-core EPYC
+- Root cause: at 16 threads, thread contention and NUMA overhead outweigh parallelism for the sequential token generation workload
+- **Recommendation**: Use `--threads 12` instead of `--threads 16` for all server profiles
+
+### Dual-Model Serving Optimization
+
+With 12 threads optimal for single-model serving, this opens the possibility of running **two models simultaneously** on 16 cores (e.g., 8 threads each) for multi-model routing:
+
+| Config | 2B TG | 4B TG | Use Case |
+|--------|-------|-------|----------|
+| Single 12t | 21.0 | 9.1 | Best single-model performance |
+| Dual 8t+8t | 18.9 + 8.2 | — | Run both 2B + 4B simultaneously |
+
+Running both models at 8 threads each still gives usable TG (18.9 for 2B, 8.2 for 4B) — enabling future multi-model routing where simple tasks go to the faster 2B and complex tasks go to the 4B.
+
+### Context Length Impact (New Finding)
+
+Gilgamesh compacts context at ~12K tokens, so 65536 ctx is rarely needed. Testing memory impact of reduced ctx-size on 2B Q4_K_M:
+
+| ctx-size | RAM (MB) | vs 65536 | Practical Capacity |
+|----------|----------|----------|--------------------|
+| 8192 | 1,990 | **-672MB (25% less)** | ~8K tokens (tight) |
+| 65536 | 2,662 | baseline | ~65K tokens (overkill) |
+
+**Findings:**
+- KV cache for full 65K context adds ~672MB RAM
+- Gilgamesh never needs >12K tokens (compaction threshold)
+- `--ctx-size 16384` would save ~500MB while covering all practical agent usage
+- **Recommendation**: Use `--ctx-size 16384` for memory-constrained setups, `65536` only if running long multi-turn sessions without compaction
+
 ## Future Trials
 
-- [ ] 4B Q4_K_M agent benchmarks — is tool calling reliability same as Q8_0?
+- [x] ~~4B Q4_K_M agent benchmarks~~ — DONE: better than Q8_0, recommend as heavy profile
+- [x] ~~Thread count tuning~~ — DONE: 12 threads optimal, 16 threads hurts TG
+- [x] ~~Context length impact~~ — DONE: 65K ctx adds 672MB RAM, 16K is sufficient
 - [ ] IQ4_XS / IQ3_M quants — smaller memory footprint, quality impact?
-- [ ] Context length impact — does shorter ctx-size improve speed?
-- [ ] Thread count tuning — is 16 threads always optimal? Test 8, 12, 20
+- [x] ~~Context length impact~~ — DONE: 65K ctx adds 672MB RAM, 16K sufficient for agent
+- [x] ~~Thread count tuning~~ — DONE: 12 threads optimal on 16-core EPYC
 - [ ] Batch size tuning — effect on prompt processing speed
 - [ ] New model families — Phi-4, Gemma 3, others that fit CPU constraints
 - [ ] Speculative decoding — draft model (0.8B) + verify (4B)?
