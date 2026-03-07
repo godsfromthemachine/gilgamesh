@@ -91,6 +91,9 @@ func main() {
 		sessLog := session.NewLogger()
 		defer sessLog.Close()
 		registry := tools.NewRegistry()
+		for _, ct := range tools.LoadCustomToolDefs() {
+			registry.RegisterCustom(ct)
+		}
 		registry.Filter(cfg.AllowedTools, cfg.DeniedTools)
 
 		srv := mcp.NewServer(registry, hookReg, sessLog, version)
@@ -110,6 +113,9 @@ func main() {
 		defer sessLog.Close()
 
 		ag := agent.New(client, hookReg, sessLog, nil)
+		for _, ct := range tools.LoadCustomToolDefs() {
+			ag.Registry().RegisterCustom(ct)
+		}
 		ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 		registry := ag.Registry()
 
@@ -131,6 +137,10 @@ func main() {
 	mem.Load() // best-effort — missing file is fine
 
 	ag := agent.New(client, hookReg, sessLog, mem)
+	customTools := tools.LoadCustomToolDefs()
+	for _, ct := range customTools {
+		ag.Registry().RegisterCustom(ct)
+	}
 	ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 	skills := gilgacontext.LoadSkills()
 
@@ -150,6 +160,9 @@ func main() {
 		} else {
 			fmt.Printf("\033[90m%d skills available (%d built-in)\033[0m\n", len(skills), builtin)
 		}
+	}
+	if len(customTools) > 0 {
+		fmt.Printf("\033[90m%d custom tools loaded\033[0m\n", len(customTools))
 	}
 	if len(mem.Entries) > 0 {
 		fmt.Printf("\033[90m%d memories loaded\033[0m\n", len(mem.Entries))
@@ -395,6 +408,7 @@ Interactive commands:
 Configuration:
   .gilgameshfile                 Project context (loaded into system prompt)
   .gilgamesh/memory.json         Persistent memory (managed via /remember)
+  .gilgamesh/tools.json          Custom tool definitions (shell commands)
   .gilgamesh/skills/*.md         Project-local skills
   .gilgamesh/hooks.json          Tool execution hooks
   ~/.config/gilgamesh/skills/    Global skills

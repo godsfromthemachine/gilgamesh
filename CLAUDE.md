@@ -28,6 +28,7 @@ go test ./... -v -cover      # run all tests
 - **Keep tool output capped.** read: 500 lines, bash: 10KB, grep: 50 matches, test: 15KB.
 - **Test everything.** This is a TDD agent — it must have comprehensive tests. Use table-driven tests with `testing` stdlib.
 - **Each tool is a file.** `tools/newtool.go` returns `*Tool` with `Name`, `Description`, `Parameters` (JSON Schema), `Execute` (closure).
+- **Custom tools** defined in `.gilgamesh/tools.json` — shell commands with `{{param}}` template substitution and `GILGAMESH_<PARAM>` env vars.
 - **All three interfaces share one registry.** CLI, MCP, and HTTP all use `tools.Registry`. No capability is exclusive to any interface.
 - **Version is in `main.go`.** Constant `version = "0.5.0"`.
 
@@ -39,6 +40,7 @@ agent/agent.go    Core loop: prompt → LLM → tool calls → repeat (max 15 lo
 agent/prompt.go   System prompt (~300 tokens, TDD-first)
 llm/client.go     OpenAI-compatible streaming SSE client
 tools/registry.go Tool registration + dispatch; tools/*.go = 7 built-in tools
+tools/custom.go   Custom tool loading (.gilgamesh/tools.json) + execution
 mcp/protocol.go   JSON-RPC 2.0 types; mcp/server.go = MCP stdio server
 server/server.go  HTTP API: /api/health, /api/tools, /api/tools/{name}, /api/chat (SSE)
 config/config.go  Model profiles (fast/default/heavy)
