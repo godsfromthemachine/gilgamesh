@@ -59,6 +59,9 @@ func main() {
 			}
 			printCompletion(shell)
 			return
+		case "man":
+			printManPage()
+			return
 		case "-p", "--port":
 			if i+1 < len(args) {
 				i++
@@ -507,4 +510,151 @@ complete -c gilgamesh -n '__fish_seen_subcommand_from completion' -xa 'bash zsh 
 		fmt.Fprintf(os.Stderr, "unsupported shell: %s (supported: bash, zsh, fish)\n", shell)
 		os.Exit(1)
 	}
+}
+
+func printManPage() {
+	fmt.Printf(`.TH GILGAMESH 1 "March 2026" "v%s" "User Commands"
+.SH NAME
+gilgamesh \- local AI coding agent & testing companion
+.SH SYNOPSIS
+.B gilgamesh
+[\fIOPTIONS\fR] [\fICOMMAND\fR] [\fIARGS\fR]
+.SH DESCRIPTION
+Gilgamesh is a TDD-driven CLI coding agent that connects to local AI models
+(llama.cpp or any OpenAI-compatible endpoint) and provides tool-calling
+capabilities for software engineering tasks. It promotes a test-driven
+development approach and is designed for CPU inference with small models.
+.PP
+Part of the Gods from the Machine project.
+.SH COMMANDS
+.TP
+.B run \fIPROMPT\fR
+One-shot mode: execute a single prompt and exit.
+.TP
+.B run /\fISKILL\fR [\fIARGS\fR]
+Run a built-in or project-local skill.
+.TP
+.B mcp
+Start MCP server (JSON-RPC 2.0 over stdio).
+.TP
+.B serve
+Start HTTP API server on port 7777.
+.TP
+.B completion \fISHELL\fR
+Generate shell completions (bash, zsh, fish).
+.TP
+.B man
+Print this man page to stdout.
+.SH OPTIONS
+.TP
+.B \-m, \-\-model \fINAME\fR
+Select model profile (fast, default, heavy).
+.TP
+.B \-p, \-\-port \fIPORT\fR
+Server port (with serve command).
+.TP
+.B \-h, \-\-help
+Show usage information.
+.TP
+.B \-v, \-\-version
+Show version.
+.SH INTERACTIVE COMMANDS
+.TP
+.B /model [\fINAME\fR]
+Switch model mid-session (fast, default, heavy).
+.TP
+.B /clear
+Reset conversation context.
+.TP
+.B /skills
+List available skills (built-in and project-local).
+.TP
+.B /memory
+List remembered facts.
+.TP
+.B /remember \fIFACT\fR
+Remember a fact across sessions.
+.TP
+.B /forget \fIN\fR|\fITEXT\fR
+Forget by entry number or matching text.
+.TP
+.B /resume [\fIPATH\fR]
+Resume a previous conversation.
+.TP
+.B /sessions
+List recent saved sessions.
+.TP
+.B /tokens
+Show estimated context token count.
+.TP
+.B /session
+Show session log file path.
+.TP
+.B /distill [\fIPATH\fR]
+Summarize a session for skill extraction.
+.TP
+.B /tdd \fIFEATURE\fR
+Red-green-refactor workflow.
+.TP
+.B /exit
+Save history and quit.
+.SH FILES
+.TP
+.B gilgamesh.json
+Model configuration (profiles, endpoints, API keys).
+.TP
+.B .gilgameshfile
+Project context loaded into the system prompt.
+.TP
+.B .gilgamesh/memory.json
+Persistent memory entries managed via /remember.
+.TP
+.B .gilgamesh/tools.json
+Custom tool definitions (shell commands).
+.TP
+.B .gilgamesh/skills/*.md
+Project-local skill templates.
+.TP
+.B .gilgamesh/hooks.json
+Pre/post tool execution hooks.
+.TP
+.B .gilgamesh/sessions/
+Session logs (JSONL) and conversation histories (JSON).
+.TP
+.B ~/.config/gilgamesh/skills/
+Global skill templates.
+.SH BUILT-IN SKILLS
+commit, review, explain, fix, refactor, doc, tdd
+.SH BUILT-IN TOOLS
+read, write, edit, bash, grep, glob, test
+.SH ENVIRONMENT
+.TP
+.B GILGAMESH_ARGS
+Set by custom tools: full JSON arguments.
+.TP
+.B GILGAMESH_<PARAM>
+Set by custom tools: individual parameter values.
+.SH EXAMPLES
+.TP
+Interactive mode:
+.B gilgamesh
+.TP
+One-shot with heavy model:
+.B gilgamesh -m heavy run "refactor main.go"
+.TP
+TDD workflow:
+.B gilgamesh run /tdd "add user validation"
+.TP
+MCP server for Claude Desktop:
+.B gilgamesh mcp
+.TP
+Install man page:
+.B gilgamesh man | sudo tee /usr/local/share/man/man1/gilgamesh.1
+.SH SEE ALSO
+.UR https://github.com/godsfromthemachine/gilgamesh
+GitHub repository
+.UE
+.SH AUTHORS
+Gods from the Machine project.
+`, version)
 }
