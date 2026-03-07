@@ -73,9 +73,11 @@ Create `gilgamesh.json` in your project root or `~/.config/gilgamesh/gilgamesh.j
 
 Use `allowed_tools` to whitelist specific tools, or `denied_tools` to blacklist them. If both are set, allowed is applied first, then denied.
 
+For detailed instructions on setting up llama.cpp and local models, see [LOCAL_AI_SETUP.md](LOCAL_AI_SETUP.md).
+
 ## Project context
 
-Add a `.gilgameshfile` or `.gilgamesh/context.md` to your project root to inject project-specific context into the system prompt.
+Add a `.gilgameshfile` or `.gilgamesh/context.md` to your project root to inject project-specific context into the system prompt. See [docs/CONTEXT_GUIDE.md](docs/CONTEXT_GUIDE.md) for best practices and examples.
 
 ## Skills
 
