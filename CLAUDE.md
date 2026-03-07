@@ -45,7 +45,7 @@ mcp/protocol.go   JSON-RPC 2.0 types; mcp/server.go = MCP stdio server
 server/server.go  HTTP API: /api/health, /api/tools, /api/tools/{name}, /api/chat (SSE)
 config/config.go  Model profiles (fast/default/heavy)
 context/context.go Project context + skills (6 built-in + project-local)
-context/builtin_skills/ Embedded skill templates (commit, review, explain, fix, refactor, doc)
+context/builtin_skills/ Embedded skill templates (commit, review, explain, fix, refactor, doc, tdd)
 memory/memory.go  Project-scoped persistent memory (.gilgamesh/memory.json)
 hooks/hooks.go    Pre/post tool hooks (.gilgamesh/hooks.json)
 session/session.go JSONL session logging

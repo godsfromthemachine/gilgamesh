@@ -169,7 +169,7 @@ func TestBuiltinSkillsLoaded(t *testing.T) {
 	// No project skills — should still get built-in skills
 	skills := LoadSkills()
 
-	expected := []string{"commit", "review", "explain", "fix", "refactor", "doc"}
+	expected := []string{"commit", "review", "explain", "fix", "refactor", "doc", "tdd"}
 	for _, name := range expected {
 		s, ok := skills[name]
 		if !ok {
