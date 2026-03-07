@@ -138,6 +138,99 @@ func TestLoadHomeConfig(t *testing.T) {
 	}
 }
 
+func TestValidateGood(t *testing.T) {
+	cfg := DefaultConfig()
+	warnings := cfg.Validate()
+	if len(warnings) != 0 {
+		t.Errorf("default config should have no warnings, got %v", warnings)
+	}
+}
+
+func TestValidateBadActiveModel(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ActiveModel = "nonexistent"
+	warnings := cfg.Validate()
+	if len(warnings) == 0 {
+		t.Error("expected warning for missing active_model")
+	}
+}
+
+func TestValidateBadEndpoint(t *testing.T) {
+	cfg := DefaultConfig()
+	m := cfg.Models["fast"]
+	m.Endpoint = "ftp://bad"
+	cfg.Models["fast"] = m
+	warnings := cfg.Validate()
+	found := false
+	for _, w := range warnings {
+		if contains(w, "http://") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected warning about endpoint protocol")
+	}
+}
+
+func TestValidateEmptyName(t *testing.T) {
+	cfg := DefaultConfig()
+	m := cfg.Models["fast"]
+	m.Name = ""
+	cfg.Models["fast"] = m
+	warnings := cfg.Validate()
+	if len(warnings) == 0 {
+		t.Error("expected warning for empty model name")
+	}
+}
+
+func TestFormat(t *testing.T) {
+	cfg := DefaultConfig()
+	out := cfg.Format()
+	if !contains(out, "* ") {
+		t.Error("expected active model marker '*'")
+	}
+	if !contains(out, "default") {
+		t.Error("expected 'default' in format output")
+	}
+}
+
+func TestApplyEnv(t *testing.T) {
+	cfg := DefaultConfig()
+
+	t.Setenv("GILGAMESH_ACTIVE_MODEL", "heavy")
+	t.Setenv("GILGAMESH_ENDPOINT", "http://override:9999/v1")
+	t.Setenv("GILGAMESH_API_KEY", "sk-override")
+	t.Setenv("GILGAMESH_MODEL_NAME", "override-model")
+
+	cfg.ApplyEnv()
+
+	if cfg.ActiveModel != "heavy" {
+		t.Errorf("ActiveModel = %q, want heavy", cfg.ActiveModel)
+	}
+	m := cfg.GetModel()
+	if m.Endpoint != "http://override:9999/v1" {
+		t.Errorf("Endpoint = %q, want override", m.Endpoint)
+	}
+	if m.APIKey != "sk-override" {
+		t.Errorf("APIKey = %q, want sk-override", m.APIKey)
+	}
+	if m.Name != "override-model" {
+		t.Errorf("Name = %q, want override-model", m.Name)
+	}
+}
+
+func TestApplyEnvNoVars(t *testing.T) {
+	cfg := DefaultConfig()
+	// Clear any that might be set
+	for _, k := range []string{"GILGAMESH_ACTIVE_MODEL", "GILGAMESH_ENDPOINT", "GILGAMESH_API_KEY", "GILGAMESH_MODEL_NAME"} {
+		os.Unsetenv(k)
+	}
+	cfg.ApplyEnv()
+	if cfg.ActiveModel != "default" {
+		t.Errorf("ActiveModel changed without env vars: %q", cfg.ActiveModel)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {

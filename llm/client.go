@@ -3,6 +3,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,6 +78,11 @@ func NewClient(endpoint, apiKey, model string) *Client {
 
 // StreamChat sends a streaming chat completion request and calls onDelta for each chunk.
 func (c *Client) StreamChat(messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
+	return c.StreamChatWithContext(context.Background(), messages, tools, onDelta)
+}
+
+// StreamChatWithContext is like StreamChat but accepts a context for cancellation.
+func (c *Client) StreamChatWithContext(ctx context.Context, messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
 	req := ChatRequest{
 		Model:    c.model,
 		Messages: messages,
@@ -91,7 +97,7 @@ func (c *Client) StreamChat(messages []Message, tools []ToolDef, onDelta func(St
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.endpoint+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type ModelConfig struct {
@@ -65,6 +66,8 @@ func Load() (*Config, error) {
 		break
 	}
 
+	cfg.ApplyEnv()
+
 	return cfg, nil
 }
 
@@ -78,4 +81,61 @@ func (c *Config) GetModel() ModelConfig {
 		return m
 	}
 	return c.Models["fast"]
+}
+
+// Validate checks the config for common errors and returns warnings.
+func (c *Config) Validate() []string {
+	var warnings []string
+
+	if _, ok := c.Models[c.ActiveModel]; !ok {
+		warnings = append(warnings, fmt.Sprintf("active_model %q not found in models", c.ActiveModel))
+	}
+
+	for name, m := range c.Models {
+		if m.Name == "" {
+			warnings = append(warnings, fmt.Sprintf("model %q has empty name", name))
+		}
+		if m.Endpoint == "" {
+			warnings = append(warnings, fmt.Sprintf("model %q has empty endpoint", name))
+		} else if !strings.HasPrefix(m.Endpoint, "http://") && !strings.HasPrefix(m.Endpoint, "https://") {
+			warnings = append(warnings, fmt.Sprintf("model %q endpoint should start with http:// or https://", name))
+		}
+	}
+
+	return warnings
+}
+
+// Format returns a multi-line summary of all model profiles.
+func (c *Config) Format() string {
+	var b strings.Builder
+	for name, m := range c.Models {
+		marker := "  "
+		if name == c.ActiveModel {
+			marker = "* "
+		}
+		fmt.Fprintf(&b, "%s%-10s %s @ %s\n", marker, name, m.Name, m.Endpoint)
+	}
+	return b.String()
+}
+
+// ApplyEnv overrides config values from environment variables.
+func (c *Config) ApplyEnv() {
+	if v := os.Getenv("GILGAMESH_ACTIVE_MODEL"); v != "" {
+		c.ActiveModel = v
+	}
+	if v := os.Getenv("GILGAMESH_ENDPOINT"); v != "" {
+		m := c.GetModel()
+		m.Endpoint = v
+		c.Models[c.ActiveModel] = m
+	}
+	if v := os.Getenv("GILGAMESH_API_KEY"); v != "" {
+		m := c.GetModel()
+		m.APIKey = v
+		c.Models[c.ActiveModel] = m
+	}
+	if v := os.Getenv("GILGAMESH_MODEL_NAME"); v != "" {
+		m := c.GetModel()
+		m.Name = v
+		c.Models[c.ActiveModel] = m
+	}
 }

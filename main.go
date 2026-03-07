@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +20,10 @@ import (
 	"github.com/godsfromthemachine/gilgamesh/server"
 	"github.com/godsfromthemachine/gilgamesh/session"
 	"github.com/godsfromthemachine/gilgamesh/tools"
+	"github.com/godsfromthemachine/gilgamesh/ui"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	cfg, err := config.Load()
@@ -115,7 +118,7 @@ func main() {
 		sessLog := session.NewLogger()
 		defer sessLog.Close()
 
-		ag := agent.New(client, hookReg, sessLog, nil)
+		ag := agent.New(client, hookReg, sessLog, nil, nil)
 		for _, ct := range tools.LoadCustomToolDefs() {
 			ag.Registry().RegisterCustom(ct)
 		}
@@ -130,6 +133,13 @@ func main() {
 		return
 	}
 
+	ui.Init()
+
+	// Show config validation warnings
+	for _, w := range cfg.Validate() {
+		fmt.Fprintln(os.Stderr, ui.Warning("config: "+w))
+	}
+
 	model := cfg.GetModel()
 	client := llm.NewClient(model.Endpoint, model.APIKey, model.Name)
 	hookReg := hooks.Load()
@@ -139,7 +149,48 @@ func main() {
 	mem := memory.NewStore(".gilgamesh/memory.json")
 	mem.Load() // best-effort — missing file is fine
 
-	ag := agent.New(client, hookReg, sessLog, mem)
+	// Wire UI callbacks for CLI mode
+	var spinner *ui.Spinner
+	var renderer *ui.StreamRenderer
+	uiCb := &agent.UICallbacks{
+		OnToolStart: func(name, briefArgs string) {
+			label := ui.ToolName(ui.ToolIcon() + name)
+			if briefArgs != "" {
+				label += " → " + briefArgs
+			}
+			spinner = ui.NewSpinner(label)
+			spinner.Start()
+		},
+		OnToolSuccess: func(lines int, elapsed time.Duration) {
+			spinner.Stop(ui.ToolSuccess(fmt.Sprintf("  %s %d lines (%s)", ui.SuccessIcon(), lines, elapsed.Round(time.Millisecond))))
+		},
+		OnToolError: func(err error, elapsed time.Duration) {
+			if elapsed > 0 {
+				spinner.Stop(ui.ToolError(fmt.Sprintf("  %s %s (%s)", ui.ErrorIcon(), err, elapsed.Round(time.Millisecond))))
+			} else {
+				spinner.Stop(ui.Warning(fmt.Sprintf("  %s", err)))
+			}
+		},
+		OnLoopDetected: func() {
+			fmt.Fprintf(os.Stderr, "\n%s\n", ui.Warning("[loop detected — forcing response]"))
+		},
+		OnCompact: func(count, before, after int) {
+			fmt.Fprintln(os.Stderr, ui.Muted(fmt.Sprintf("[compacted %d tool results: ~%d → ~%d tokens]", count, before, after)))
+		},
+		OnStreamStart: func() {
+			renderer = ui.NewStreamRenderer()
+			fmt.Print("\n")
+		},
+		OnStreamToken: func(token string) {
+			fmt.Print(renderer.WriteToken(token))
+		},
+		OnStreamEnd: func() {
+			fmt.Print(renderer.Flush())
+			fmt.Println()
+		},
+	}
+
+	ag := agent.New(client, hookReg, sessLog, mem, uiCb)
 	customTools := tools.LoadCustomToolDefs()
 	for _, ct := range customTools {
 		ag.Registry().RegisterCustom(ct)
@@ -147,28 +198,28 @@ func main() {
 	ag.Registry().Filter(cfg.AllowedTools, cfg.DeniedTools)
 	skills := gilgacontext.LoadSkills()
 
-	fmt.Printf("\033[1mgilgamesh\033[0m v%s · %s · %s", version, cfg.ActiveModel, model.Name)
+	fmt.Printf("%s v%s · %s · %s", ui.Banner("gilgamesh"), version, cfg.ActiveModel, model.Name)
 
 	// Show startup token overhead
 	initTokens := ag.EstimateTokens()
 	fmt.Printf(" · ~%d tok overhead\n", initTokens)
 
 	if hookReg.HasHooks() {
-		fmt.Printf("\033[90mhooks loaded\033[0m\n")
+		fmt.Println(ui.Muted("hooks loaded"))
 	}
 	if len(skills) > 0 {
 		builtin, custom := gilgacontext.CountSkills(skills)
 		if custom > 0 {
-			fmt.Printf("\033[90m%d skills available (%d built-in, %d project)\033[0m\n", len(skills), builtin, custom)
+			fmt.Println(ui.Muted(fmt.Sprintf("%d skills available (%d built-in, %d project)", len(skills), builtin, custom)))
 		} else {
-			fmt.Printf("\033[90m%d skills available (%d built-in)\033[0m\n", len(skills), builtin)
+			fmt.Println(ui.Muted(fmt.Sprintf("%d skills available (%d built-in)", len(skills), builtin)))
 		}
 	}
 	if len(customTools) > 0 {
-		fmt.Printf("\033[90m%d custom tools loaded\033[0m\n", len(customTools))
+		fmt.Println(ui.Muted(fmt.Sprintf("%d custom tools loaded", len(customTools))))
 	}
 	if len(mem.Entries) > 0 {
-		fmt.Printf("\033[90m%d memories loaded\033[0m\n", len(mem.Entries))
+		fmt.Println(ui.Muted(fmt.Sprintf("%d memories loaded", len(mem.Entries))))
 	}
 
 	// One-shot mode
@@ -188,22 +239,294 @@ func main() {
 			}
 		}
 
+		// Set up Ctrl+C handling for one-shot
+		ctx, cancel := context.WithCancel(context.Background())
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt)
+		go func() {
+			<-sigCh
+			cancel()
+		}()
+
 		start := time.Now()
-		if err := ag.Run(msg); err != nil {
-			fmt.Fprintf(os.Stderr, "\nerror: %s\n", err)
+		if err := ag.RunWithContext(ctx, msg); err != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintf(os.Stderr, "\n%s\n", ui.Warning("[interrupted]"))
+			} else {
+				fmt.Fprintln(os.Stderr, ui.FormatError(err))
+			}
+			signal.Stop(sigCh)
 			os.Exit(1)
 		}
+		signal.Stop(sigCh)
 		elapsed := time.Since(start)
-		fmt.Printf("\n\033[90m(%s)\033[0m\n", elapsed.Round(time.Millisecond))
+		fmt.Printf("\n%s\n", ui.Muted(fmt.Sprintf("(%s)", elapsed.Round(time.Millisecond))))
 		return
 	}
 
-	// Interactive REPL
+	// Build command registry for interactive REPL
+	cmds := ui.NewCommandRegistry()
+
+	// --- Navigation ---
+	cmds.Register(&ui.Command{
+		Name: "model", Usage: "/model [name]", Category: "Navigation",
+		Description: "Switch model (fast, default, heavy)",
+		Handler: func(args string) bool {
+			if args == "" {
+				fmt.Println(ui.Muted(fmt.Sprintf("Current: %s (%s)", cfg.ActiveModel, model.Name)))
+				fmt.Println(ui.Muted("Usage: /model [fast|default|heavy]"))
+				return true
+			}
+			cfg.ActiveModel = args
+			model = cfg.GetModel()
+			client = llm.NewClient(model.Endpoint, model.APIKey, model.Name)
+			ag.SetClient(client)
+			fmt.Println(ui.Muted(fmt.Sprintf("Switched to %s (%s)", cfg.ActiveModel, model.Name)))
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "clear", Usage: "/clear", Category: "Navigation",
+		Description: "Reset context",
+		Handler: func(args string) bool {
+			ag.ClearHistory()
+			fmt.Println(ui.Muted("Context cleared."))
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "tokens", Usage: "/tokens", Category: "Navigation",
+		Description: "Token estimate",
+		Handler: func(args string) bool {
+			fmt.Println(ui.Muted(fmt.Sprintf("Estimated context: ~%d tokens", ag.EstimateTokens())))
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "status", Usage: "/status", Category: "Navigation",
+		Description: "Show model, context, tools, skills",
+		Handler: func(args string) bool {
+			tbl := ui.NewTable()
+			tbl.AddRow("Model", fmt.Sprintf("%s (%s)", cfg.ActiveModel, model.Name))
+			tbl.AddRow("Endpoint", model.Endpoint)
+			tokens := ag.EstimateTokens()
+			tbl.AddRow("Context", ui.Gauge(tokens, 12000, 20))
+			tbl.AddRow("Tools", fmt.Sprintf("%d", len(ag.Registry().Definitions())))
+			builtin, custom := gilgacontext.CountSkills(skills)
+			tbl.AddRow("Skills", fmt.Sprintf("%d (%d built-in, %d project)", len(skills), builtin, custom))
+			tbl.AddRow("Memories", fmt.Sprintf("%d", len(mem.Entries)))
+			if p := sessLog.Path(); p != "" {
+				tbl.AddRow("Session", p)
+			}
+			fmt.Print(tbl.Render())
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "config", Usage: "/config", Category: "Navigation",
+		Description: "Show model config",
+		Handler: func(args string) bool {
+			fmt.Print(cfg.Format())
+			return true
+		},
+	})
+
+	// --- Memory ---
+	cmds.Register(&ui.Command{
+		Name: "remember", Usage: "/remember <fact>", Category: "Memory",
+		Description: "Remember across sessions",
+		Handler: func(args string) bool {
+			if args == "" {
+				fmt.Println(ui.Muted("Usage: /remember <fact>"))
+				return true
+			}
+			mem.Add(args)
+			if err := mem.Save(); err != nil {
+				fmt.Println(ui.ToolError(fmt.Sprintf("save error: %s", err)))
+			} else {
+				fmt.Println(ui.Muted(fmt.Sprintf("Remembered (%d total)", len(mem.Entries))))
+			}
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "forget", Usage: "/forget <n|text>", Category: "Memory",
+		Description: "Forget by number or text",
+		Handler: func(args string) bool {
+			if args == "" {
+				fmt.Println(ui.Muted("Usage: /forget <n|text>"))
+				return true
+			}
+			if n, err := strconv.Atoi(args); err == nil {
+				if mem.Remove(n - 1) {
+					mem.Save()
+					fmt.Println(ui.Muted(fmt.Sprintf("Forgot entry %d (%d remaining)", n, len(mem.Entries))))
+				} else {
+					fmt.Println(ui.Muted(fmt.Sprintf("No entry #%d", n)))
+				}
+			} else {
+				removed := mem.RemoveByContent(args)
+				if removed > 0 {
+					mem.Save()
+					fmt.Println(ui.Muted(fmt.Sprintf("Forgot %d entries matching %q (%d remaining)", removed, args, len(mem.Entries))))
+				} else {
+					fmt.Println(ui.Muted(fmt.Sprintf("No memories matching %q", args)))
+				}
+			}
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "memory", Usage: "/memory", Category: "Memory",
+		Description: "List remembered facts",
+		Handler: func(args string) bool {
+			fmt.Print(ui.Muted(mem.FormatList()))
+			return true
+		},
+	})
+
+	// --- Sessions ---
+	cmds.Register(&ui.Command{
+		Name: "resume", Usage: "/resume [path]", Category: "Sessions",
+		Description: "Resume previous conversation",
+		Handler: func(args string) bool {
+			histPath := ""
+			if args == "" {
+				histPath = session.LatestHistory()
+				if histPath == "" {
+					fmt.Println(ui.Muted("No saved sessions to resume."))
+					return true
+				}
+			} else {
+				histPath = args
+			}
+			history, err := session.LoadHistory(histPath)
+			if err != nil {
+				fmt.Println(ui.ToolError(fmt.Sprintf("Failed to load: %s", err)))
+				return true
+			}
+			ag.LoadHistory(history)
+			userMsgs := 0
+			for _, m := range history {
+				if m.Role == "user" {
+					userMsgs++
+				}
+			}
+			fmt.Println(ui.Muted(fmt.Sprintf("Resumed %d messages (%d user) from %s", len(history), userMsgs, histPath)))
+			fmt.Println(ui.Muted(fmt.Sprintf("Estimated context: ~%d tokens", ag.EstimateTokens())))
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "sessions", Usage: "/sessions", Category: "Sessions",
+		Description: "List recent sessions",
+		Handler: func(args string) bool {
+			histories := session.ListHistories(10)
+			if len(histories) == 0 {
+				fmt.Println(ui.Muted("No saved sessions."))
+			} else {
+				fmt.Println(ui.Muted("Recent sessions (newest first):"))
+				for i, h := range histories {
+					fmt.Println(ui.Muted(fmt.Sprintf("  %d. %s", i+1, h)))
+				}
+				fmt.Println(ui.Muted("Use /resume to load the most recent, or /resume <path>"))
+			}
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "session", Usage: "/session", Category: "Sessions",
+		Description: "Show session log path",
+		Handler: func(args string) bool {
+			if p := sessLog.Path(); p != "" {
+				fmt.Println(ui.Muted(fmt.Sprintf("Logging to: %s", p)))
+			} else {
+				fmt.Println(ui.Muted("No active session log."))
+			}
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "distill", Usage: "/distill [path]", Category: "Sessions",
+		Description: "Summarize session",
+		Handler: func(args string) bool {
+			if args == "" {
+				if p := sessLog.Path(); p != "" {
+					summary, err := session.Distill(p)
+					if err != nil {
+						fmt.Println(ui.ToolError(err.Error()))
+					} else {
+						fmt.Println(ui.Muted(summary))
+					}
+				} else {
+					fmt.Println(ui.Muted("No active session."))
+				}
+			} else {
+				summary, err := session.Distill(args)
+				if err != nil {
+					fmt.Println(ui.ToolError(err.Error()))
+				} else {
+					fmt.Println(ui.Muted(summary))
+				}
+			}
+			return true
+		},
+	})
+
+	// --- Other ---
+	cmds.Register(&ui.Command{
+		Name: "skills", Usage: "/skills", Category: "Other",
+		Description: "List available skills",
+		Handler: func(args string) bool {
+			skills = gilgacontext.LoadSkills() // reload
+			fmt.Print(ui.Muted(gilgacontext.ListSkills(skills)))
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "help", Usage: "/help", Category: "Other",
+		Description: "Show this help",
+		Handler: func(args string) bool {
+			for _, g := range cmds.ListByCategory() {
+				fmt.Println(ui.Bold(g.Category))
+				tbl := ui.NewTable()
+				for _, c := range g.Commands {
+					tbl.AddRow(c.Usage, c.Description)
+				}
+				fmt.Print(tbl.Render())
+				fmt.Println()
+			}
+			return true
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "exit", Usage: "/exit", Category: "Other",
+		Description: "Quit",
+		Handler: func(args string) bool {
+			if p := sessLog.Path(); p != "" {
+				if histPath, err := session.SaveHistory(p, ag.History()); err == nil && histPath != "" {
+					fmt.Println(ui.Muted(fmt.Sprintf("History saved: %s", histPath)))
+				}
+				fmt.Println(ui.Muted(fmt.Sprintf("Session: %s", p)))
+			}
+			fmt.Println("Bye.")
+			return false // exit
+		},
+	})
+	cmds.Register(&ui.Command{
+		Name: "quit", Usage: "/quit", Category: "Other",
+		Description: "Quit",
+		Handler: func(args string) bool {
+			return cmds.Lookup("exit").Handler(args)
+		},
+	})
+
+	// Interactive REPL with Ctrl+C handling
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for {
-		fmt.Print("\n\033[1m>\033[0m ")
+		fmt.Print("\n" + ui.Prompt())
 		if !scanner.Scan() {
 			break
 		}
@@ -212,171 +535,59 @@ func main() {
 			continue
 		}
 
-		// Slash commands
-		switch {
-		case input == "/exit" || input == "/quit":
-			// Save conversation history for resume
-			if p := sessLog.Path(); p != "" {
-				if histPath, err := session.SaveHistory(p, ag.History()); err == nil && histPath != "" {
-					fmt.Printf("\033[90mHistory saved: %s\033[0m\n", histPath)
-				}
-				fmt.Printf("\033[90mSession: %s\033[0m\n", p)
-			}
-			fmt.Println("Bye.")
+		// Try command registry first
+		handled, shouldExit := cmds.Execute(input)
+		if shouldExit {
 			return
-		case input == "/clear":
-			ag.ClearHistory()
-			fmt.Println("\033[90mContext cleared.\033[0m")
+		}
+		if handled {
 			continue
-		case strings.HasPrefix(input, "/model"):
-			parts := strings.Fields(input)
-			if len(parts) < 2 {
-				fmt.Printf("\033[90mCurrent: %s (%s)\033[0m\n", cfg.ActiveModel, model.Name)
-				fmt.Println("\033[90mUsage: /model [fast|default|heavy]\033[0m")
+		}
+
+		// Check for skill invocation (unregistered /commands)
+		if strings.HasPrefix(input, "/") {
+			parts := strings.SplitN(input, " ", 2)
+			skillName := strings.TrimPrefix(parts[0], "/")
+			skillArgs := ""
+			if len(parts) > 1 {
+				skillArgs = parts[1]
+			}
+			if skill, ok := skills[skillName]; ok {
+				input = gilgacontext.FormatSkillPrompt(skill, skillArgs)
+				fmt.Println(ui.Muted(fmt.Sprintf("[skill: %s]", skillName)))
+			} else if !strings.ContainsAny(skillName, " \t") {
+				fmt.Println(ui.Muted(fmt.Sprintf("Unknown command: /%s", skillName)))
 				continue
-			}
-			cfg.ActiveModel = parts[1]
-			model = cfg.GetModel()
-			client = llm.NewClient(model.Endpoint, model.APIKey, model.Name)
-			ag.SetClient(client)
-			fmt.Printf("\033[90mSwitched to %s (%s)\033[0m\n", cfg.ActiveModel, model.Name)
-			continue
-		case input == "/help":
-			fmt.Println("\033[90mCommands: /model, /clear, /tokens, /skills, /memory, /remember, /forget, /resume, /sessions, /session, /distill, /exit, /help\033[0m")
-			continue
-		case input == "/tokens":
-			fmt.Printf("\033[90mEstimated context: ~%d tokens\033[0m\n", ag.EstimateTokens())
-			continue
-		case input == "/skills":
-			skills = gilgacontext.LoadSkills() // reload
-			fmt.Print("\033[90m" + gilgacontext.ListSkills(skills) + "\033[0m")
-			continue
-		case input == "/session":
-			if p := sessLog.Path(); p != "" {
-				fmt.Printf("\033[90mLogging to: %s\033[0m\n", p)
-			} else {
-				fmt.Println("\033[90mNo active session log.\033[0m")
-			}
-			continue
-		case input == "/memory":
-			fmt.Print("\033[90m" + mem.FormatList() + "\033[0m")
-			continue
-		case strings.HasPrefix(input, "/remember "):
-			fact := strings.TrimPrefix(input, "/remember ")
-			mem.Add(fact)
-			if err := mem.Save(); err != nil {
-				fmt.Printf("\033[31msave error: %s\033[0m\n", err)
-			} else {
-				fmt.Printf("\033[90mRemembered (%d total)\033[0m\n", len(mem.Entries))
-			}
-			continue
-		case strings.HasPrefix(input, "/forget "):
-			arg := strings.TrimPrefix(input, "/forget ")
-			if n, err := strconv.Atoi(arg); err == nil {
-				if mem.Remove(n - 1) {
-					mem.Save()
-					fmt.Printf("\033[90mForgot entry %d (%d remaining)\033[0m\n", n, len(mem.Entries))
-				} else {
-					fmt.Printf("\033[90mNo entry #%d\033[0m\n", n)
-				}
-			} else {
-				removed := mem.RemoveByContent(arg)
-				if removed > 0 {
-					mem.Save()
-					fmt.Printf("\033[90mForgot %d entries matching %q (%d remaining)\033[0m\n", removed, arg, len(mem.Entries))
-				} else {
-					fmt.Printf("\033[90mNo memories matching %q\033[0m\n", arg)
-				}
-			}
-			continue
-		case input == "/sessions":
-			histories := session.ListHistories(10)
-			if len(histories) == 0 {
-				fmt.Println("\033[90mNo saved sessions.\033[0m")
-			} else {
-				fmt.Println("\033[90mRecent sessions (newest first):\033[0m")
-				for i, h := range histories {
-					fmt.Printf("\033[90m  %d. %s\033[0m\n", i+1, h)
-				}
-				fmt.Println("\033[90mUse /resume to load the most recent, or /resume <path>\033[0m")
-			}
-			continue
-		case input == "/resume" || strings.HasPrefix(input, "/resume "):
-			histPath := ""
-			arg := strings.TrimPrefix(input, "/resume ")
-			if arg == "/resume" || arg == "" {
-				histPath = session.LatestHistory()
-				if histPath == "" {
-					fmt.Println("\033[90mNo saved sessions to resume.\033[0m")
-					continue
-				}
-			} else {
-				histPath = arg
-			}
-			history, err := session.LoadHistory(histPath)
-			if err != nil {
-				fmt.Printf("\033[31mFailed to load: %s\033[0m\n", err)
-				continue
-			}
-			ag.LoadHistory(history)
-			// Count user messages for context
-			userMsgs := 0
-			for _, m := range history {
-				if m.Role == "user" {
-					userMsgs++
-				}
-			}
-			fmt.Printf("\033[90mResumed %d messages (%d user) from %s\033[0m\n",
-				len(history), userMsgs, histPath)
-			fmt.Printf("\033[90mEstimated context: ~%d tokens\033[0m\n", ag.EstimateTokens())
-			continue
-		case strings.HasPrefix(input, "/distill"):
-			parts := strings.Fields(input)
-			if len(parts) < 2 {
-				if p := sessLog.Path(); p != "" {
-					summary, err := session.Distill(p)
-					if err != nil {
-						fmt.Printf("\033[31m%s\033[0m\n", err)
-					} else {
-						fmt.Printf("\033[90m%s\033[0m\n", summary)
-					}
-				} else {
-					fmt.Println("\033[90mNo active session.\033[0m")
-				}
-			} else {
-				summary, err := session.Distill(parts[1])
-				if err != nil {
-					fmt.Printf("\033[31m%s\033[0m\n", err)
-				} else {
-					fmt.Printf("\033[90m%s\033[0m\n", summary)
-				}
-			}
-			continue
-		default:
-			// Check for skill invocation
-			if strings.HasPrefix(input, "/") {
-				parts := strings.SplitN(input, " ", 2)
-				skillName := strings.TrimPrefix(parts[0], "/")
-				skillArgs := ""
-				if len(parts) > 1 {
-					skillArgs = parts[1]
-				}
-				if skill, ok := skills[skillName]; ok {
-					input = gilgacontext.FormatSkillPrompt(skill, skillArgs)
-					fmt.Printf("\033[90m[skill: %s]\033[0m\n", skillName)
-				} else if !strings.ContainsAny(skillName, " \t") {
-					fmt.Printf("\033[90mUnknown command: /%s\033[0m\n", skillName)
-					continue
-				}
 			}
 		}
 
+		// Set up per-request Ctrl+C cancellation
+		ctx, cancel := context.WithCancel(context.Background())
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt)
+		ctrlCCount := 0
+		go func() {
+			for range sigCh {
+				ctrlCCount++
+				if ctrlCCount >= 2 {
+					fmt.Fprintf(os.Stderr, "\n%s\n", ui.Warning("[force quit]"))
+					os.Exit(1)
+				}
+				cancel()
+			}
+		}()
+
 		start := time.Now()
-		if err := ag.Run(input); err != nil {
-			fmt.Fprintf(os.Stderr, "\n\033[31merror: %s\033[0m\n", err)
+		if err := ag.RunWithContext(ctx, input); err != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintf(os.Stderr, "\n%s\n", ui.Warning("[interrupted]"))
+			} else {
+				fmt.Fprintln(os.Stderr, ui.FormatError(err))
+			}
 		}
+		signal.Stop(sigCh)
 		elapsed := time.Since(start)
-		fmt.Printf("\033[90m(%s)\033[0m", elapsed.Round(time.Millisecond))
+		fmt.Print(ui.Muted(fmt.Sprintf("(%s)", elapsed.Round(time.Millisecond))))
 	}
 }
 
@@ -396,6 +607,8 @@ Usage:
 Interactive commands:
   /model [fast|default|heavy]  Switch model
   /clear                       Reset context
+  /status                      Show model, context, tools, skills
+  /config                      Show model configuration
   /skills                      List available skills
   /memory                      List remembered facts
   /remember <fact>             Remember a fact across sessions
@@ -415,6 +628,12 @@ Configuration:
   .gilgamesh/skills/*.md         Project-local skills
   .gilgamesh/hooks.json          Tool execution hooks
   ~/.config/gilgamesh/skills/    Global skills
+
+Environment variables:
+  GILGAMESH_ACTIVE_MODEL         Override active model profile
+  GILGAMESH_ENDPOINT             Override endpoint URL
+  GILGAMESH_API_KEY              Override API key
+  GILGAMESH_MODEL_NAME           Override model name
 
 Part of the Gods from the Machine project.
 https://github.com/godsfromthemachine
@@ -566,6 +785,12 @@ Switch model mid-session (fast, default, heavy).
 .B /clear
 Reset conversation context.
 .TP
+.B /status
+Show model, context gauge, tools, skills, memory, session.
+.TP
+.B /config
+Show model configuration with all profiles.
+.TP
 .B /skills
 List available skills (built-in and project-local).
 .TP
@@ -628,6 +853,18 @@ commit, review, explain, fix, refactor, doc, tdd
 .SH BUILT-IN TOOLS
 read, write, edit, bash, grep, glob, test
 .SH ENVIRONMENT
+.TP
+.B GILGAMESH_ACTIVE_MODEL
+Override active model profile (e.g. fast, default, heavy).
+.TP
+.B GILGAMESH_ENDPOINT
+Override endpoint URL for the active model.
+.TP
+.B GILGAMESH_API_KEY
+Override API key for the active model.
+.TP
+.B GILGAMESH_MODEL_NAME
+Override model name for the active model.
 .TP
 .B GILGAMESH_ARGS
 Set by custom tools: full JSON arguments.

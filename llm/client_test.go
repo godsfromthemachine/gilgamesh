@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -855,6 +856,29 @@ func TestStreamChatEndpointURLBuilding(t *testing.T) {
 
 	if capturedPath != "/chat/completions" {
 		t.Errorf("path = %q, want /chat/completions", capturedPath)
+	}
+}
+
+func TestStreamChatWithContextCancelled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Simulate a slow stream — client should cancel before reading
+		select {
+		case <-r.Context().Done():
+			return
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "", "m")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	err := c.StreamChatWithContext(ctx, []Message{{Role: "user", Content: "hi"}}, nil, func(d StreamDelta) {
+		t.Error("onDelta should not be called on cancelled context")
+	})
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
 	}
 }
 

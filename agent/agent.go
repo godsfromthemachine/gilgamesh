@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -19,6 +20,19 @@ const maxToolLoops = 15
 // compactThreshold is the estimated token count at which we start compacting old tool results.
 const compactThreshold = 12000
 
+// UICallbacks allows the CLI layer to receive agent events without the agent
+// importing any UI package. All fields are optional; nil callbacks are no-ops.
+type UICallbacks struct {
+	OnToolStart    func(name, briefArgs string)
+	OnToolSuccess  func(lines int, elapsed time.Duration)
+	OnToolError    func(err error, elapsed time.Duration)
+	OnLoopDetected func()
+	OnCompact      func(count, before, after int)
+	OnStreamToken  func(token string)
+	OnStreamStart  func()
+	OnStreamEnd    func()
+}
+
 type Agent struct {
 	client   *llm.Client
 	registry *tools.Registry
@@ -26,9 +40,10 @@ type Agent struct {
 	hooks    *hooks.Registry
 	session  *session.Logger
 	memory   *memory.Store
+	ui       *UICallbacks
 }
 
-func New(client *llm.Client, hookReg *hooks.Registry, sessLog *session.Logger, mem *memory.Store) *Agent {
+func New(client *llm.Client, hookReg *hooks.Registry, sessLog *session.Logger, mem *memory.Store, ui *UICallbacks) *Agent {
 	return &Agent{
 		client:   client,
 		registry: tools.NewRegistry(),
@@ -38,6 +53,7 @@ func New(client *llm.Client, hookReg *hooks.Registry, sessLog *session.Logger, m
 		hooks:   hookReg,
 		session: sessLog,
 		memory:  mem,
+		ui:      ui,
 	}
 }
 
@@ -91,6 +107,11 @@ func (a *Agent) EstimateTokens() int {
 
 // Run sends a user message and processes the full agent loop (including tool calls).
 func (a *Agent) Run(userMessage string) error {
+	return a.RunWithContext(context.Background(), userMessage)
+}
+
+// RunWithContext is like Run but accepts a context for cancellation (e.g. Ctrl+C).
+func (a *Agent) RunWithContext(ctx context.Context, userMessage string) error {
 	a.history = append(a.history, llm.Message{Role: "user", Content: userMessage})
 	a.session.Log(session.Entry{Type: "user", Content: userMessage})
 
@@ -98,10 +119,15 @@ func (a *Agent) Run(userMessage string) error {
 	recentCalls := make(map[string]int) // "tool:args" -> count
 
 	for loop := 0; loop < maxToolLoops; loop++ {
+		// Check context cancellation
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		// Compact context if approaching threshold
 		a.maybeCompact()
 
-		content, toolCalls, err := a.streamResponse()
+		content, toolCalls, err := a.streamResponseCtx(ctx)
 		if err != nil {
 			return err
 		}
@@ -132,14 +158,16 @@ func (a *Agent) Run(userMessage string) error {
 			}
 		}
 		if loopDetected {
-			fmt.Printf("\n\033[33m[loop detected — forcing response]\033[0m\n")
+			if a.ui != nil && a.ui.OnLoopDetected != nil {
+				a.ui.OnLoopDetected()
+			}
 			// Inject a message telling the model to stop and respond
 			a.history = append(a.history, llm.Message{
 				Role:    "user",
 				Content: "You are repeating tool calls. Stop using tools and provide your response now based on the information you already have.",
 			})
 			// One more attempt without getting stuck
-			content, _, err := a.streamResponse()
+			content, _, err := a.streamResponseCtx(ctx)
 			if err != nil {
 				return err
 			}
@@ -152,28 +180,33 @@ func (a *Agent) Run(userMessage string) error {
 
 		// Execute tool calls and append results
 		for _, tc := range toolCalls {
-			fmt.Printf("\n\033[36m⚡ %s\033[0m", tc.Function.Name)
 			args := json.RawMessage(tc.Function.Arguments)
 
-			// Show brief args
+			// Compute brief args summary for UI
+			briefArgs := ""
 			var argsMap map[string]interface{}
 			if json.Unmarshal(args, &argsMap) == nil {
 				if cmd, ok := argsMap["command"]; ok {
-					fmt.Printf(" → %s", truncate(fmt.Sprint(cmd), 80))
+					briefArgs = truncate(fmt.Sprint(cmd), 80)
 				} else if path, ok := argsMap["path"]; ok {
-					fmt.Printf(" → %s", path)
+					briefArgs = fmt.Sprint(path)
 				} else if pattern, ok := argsMap["pattern"]; ok {
-					fmt.Printf(" → %s", pattern)
+					briefArgs = fmt.Sprint(pattern)
 				}
 			}
-			fmt.Println()
+
+			if a.ui != nil && a.ui.OnToolStart != nil {
+				a.ui.OnToolStart(tc.Function.Name, briefArgs)
+			}
 
 			// Run pre-hooks
 			if a.hooks.HasHooks() {
 				preResults := a.hooks.Run(hooks.PreHook, tc.Function.Name, args, "")
 				for _, r := range preResults {
 					if r.Err != nil {
-						fmt.Printf("\033[33m  hook blocked: %s\033[0m\n", r.Err)
+						if a.ui != nil && a.ui.OnToolError != nil {
+							a.ui.OnToolError(fmt.Errorf("hook blocked: %s", r.Err), 0)
+						}
 						a.history = append(a.history, llm.Message{
 							Role:       "tool",
 							Content:    fmt.Sprintf("Blocked by pre-hook: %s", r.Err),
@@ -197,10 +230,14 @@ func (a *Agent) Run(userMessage string) error {
 
 			if err != nil {
 				result = fmt.Sprintf("Error: %s", err)
-				fmt.Printf("\033[31m  ✗ %s (%s)\033[0m\n", err, elapsed.Round(time.Millisecond))
+				if a.ui != nil && a.ui.OnToolError != nil {
+					a.ui.OnToolError(err, elapsed)
+				}
 			} else {
 				lines := strings.Count(result, "\n")
-				fmt.Printf("\033[32m  ✓ %d lines (%s)\033[0m\n", lines+1, elapsed.Round(time.Millisecond))
+				if a.ui != nil && a.ui.OnToolSuccess != nil {
+					a.ui.OnToolSuccess(lines+1, elapsed)
+				}
 			}
 
 			// Run post-hooks
@@ -250,23 +287,34 @@ func (a *Agent) maybeCompact() {
 
 	if compacted > 0 {
 		newTokens := a.EstimateTokens()
-		fmt.Printf("\033[90m[compacted %d tool results: ~%d → ~%d tokens]\033[0m\n", compacted, tokens, newTokens)
+		if a.ui != nil && a.ui.OnCompact != nil {
+			a.ui.OnCompact(compacted, tokens, newTokens)
+		}
 	}
 }
 
-// streamResponse streams LLM output to terminal and collects tool calls.
+// streamResponse streams LLM output via callbacks and collects tool calls.
 func (a *Agent) streamResponse() (string, []llm.ToolCall, error) {
+	return a.streamResponseCtx(context.Background())
+}
+
+// streamResponseCtx is like streamResponse but accepts a context for cancellation.
+func (a *Agent) streamResponseCtx(ctx context.Context) (string, []llm.ToolCall, error) {
 	var contentBuf strings.Builder
 	toolCallMap := make(map[int]*llm.ToolCall)
 	firstToken := true
 
-	err := a.client.StreamChat(a.history, a.registry.Definitions(), func(delta llm.StreamDelta) {
+	err := a.client.StreamChatWithContext(ctx, a.history, a.registry.Definitions(), func(delta llm.StreamDelta) {
 		if delta.Content != "" {
 			if firstToken {
-				fmt.Print("\n")
+				if a.ui != nil && a.ui.OnStreamStart != nil {
+					a.ui.OnStreamStart()
+				}
 				firstToken = false
 			}
-			fmt.Print(delta.Content)
+			if a.ui != nil && a.ui.OnStreamToken != nil {
+				a.ui.OnStreamToken(delta.Content)
+			}
 			contentBuf.WriteString(delta.Content)
 		}
 
@@ -294,7 +342,9 @@ func (a *Agent) streamResponse() (string, []llm.ToolCall, error) {
 	})
 
 	if contentBuf.Len() > 0 {
-		fmt.Println()
+		if a.ui != nil && a.ui.OnStreamEnd != nil {
+			a.ui.OnStreamEnd()
+		}
 	}
 
 	if err != nil {

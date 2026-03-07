@@ -58,7 +58,7 @@ func sseToolCall(id, name, args string) string {
 // It uses a nil-safe session logger (no file) and an empty hook registry.
 func newTestAgent(serverURL string) *Agent {
 	client := llm.NewClient(serverURL, "test-key", "test-model")
-	return New(client, &hooks.Registry{}, &session.Logger{}, nil)
+	return New(client, &hooks.Registry{}, &session.Logger{}, nil, nil)
 }
 
 // ---------------------------------------------------------------------------
