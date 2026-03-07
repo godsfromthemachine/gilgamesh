@@ -404,3 +404,42 @@ Tested with Qwen3.5-2B/4B Q4_K_M on llama-server, ctx-size 16384, 12 threads. KV
 - [ ] Speculative decoding — draft model (0.8B) + verify (4B)?
 - [ ] Multi-model routing — simple tasks → 2B, complex → 4B automatically
 - [ ] Flash attention impact on CPU — if llama.cpp supports it
+
+### Trial Methodology
+
+Each remaining trial follows this controlled protocol:
+
+**IQ4_XS / IQ3_M quants:**
+- Goal: Test importance-based quantization for smaller memory footprint
+- Method: Download IQ4_XS and IQ3_M quants of 2B and 4B from HuggingFace, run full bench suite
+- Metrics: PP/TG tok/s, RSS memory usage, edit task pass rate, tool call reliability
+- Hypothesis: IQ4_XS may match Q4_K_M quality at smaller size; IQ3_M may be too lossy for reliable tool calls
+
+**New model families (Phi-4-mini, Gemma-3-2B, etc.):**
+- Goal: Evaluate non-Qwen models within CPU constraints (sub-4B parameter count)
+- Method: Download Q4_K_M quants, run full bench suite with identical config
+- Metrics: Tool call reliability, edit task pass rate, tok/s, first response latency
+- Key question: Can any model beat Qwen3.5-2B's speed or 4B's quality?
+
+**Speculative decoding:**
+- Goal: Test whether 0.8B draft + 4B verify improves TG tok/s
+- Method: Use llama.cpp `--draft-model` flag with 0.8B as draft, 4B as target
+- Risk: 0.8B was rejected for agent work — high rejection rate may negate speed gain
+- Key question: Does the overhead of verification exceed the speed benefit on CPU?
+
+**Multi-model routing:**
+- Goal: Automatically route simple tasks to 2B, complex tasks to 4B
+- Design: This is a gilgamesh code feature, not just a trial
+- Approaches: (a) Heuristic routing by prompt keywords/length, (b) Fallback routing — try 2B, retry on 4B if tool call fails
+- Key question: Can simple heuristics reliably classify task complexity?
+
+### Reproducibility
+
+To reproduce any trial:
+
+1. Stop all inference servers (`pkill llama-server`)
+2. Wait for clean CPU state (no background inference)
+3. Start only the server under test with documented parameters
+4. Run `go run ./cmd/bench` (or `go run ./cmd/bench -all` for comparisons)
+5. Raw inference: average of 2 runs. Agent benchmarks: average of 3 runs
+6. Same gilgamesh binary, same config, same test prompts throughout
