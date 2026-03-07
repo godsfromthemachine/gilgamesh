@@ -83,6 +83,85 @@ For frequently used environment commands, register them as custom tools in `.gil
 
 Custom tools use `{{param}}` template substitution and also set `GILGAMESH_<PARAM>` environment variables.
 
+### Full Environment Example
+
+A comprehensive `.gilgamesh/tools.json` for a rich development environment:
+
+```json
+[
+  {
+    "name": "search",
+    "description": "Search file contents with ripgrep",
+    "command": "rg --no-heading --line-number '{{pattern}}' {{path}}",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": { "type": "string", "description": "Regex pattern" },
+        "path": { "type": "string", "description": "Directory to search" }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "find",
+    "description": "Find files by name pattern",
+    "command": "fd --type {{type}} '{{pattern}}' {{path}}",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": { "type": "string", "description": "Name pattern" },
+        "type": { "type": "string", "description": "f=file, d=directory" },
+        "path": { "type": "string", "description": "Root directory" }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "tree",
+    "description": "Show directory tree structure",
+    "command": "eza --tree --level={{depth}} {{path}}",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Root directory" },
+        "depth": { "type": "string", "description": "Max depth level" }
+      }
+    }
+  },
+  {
+    "name": "preview",
+    "description": "Preview file with syntax highlighting",
+    "command": "bat --style=numbers --line-range=:{{lines}} '{{path}}'",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "File to preview" },
+        "lines": { "type": "string", "description": "Max lines to show" }
+      },
+      "required": ["path"]
+    }
+  }
+]
+```
+
+These tools wrap modern CLI utilities and make them available to the agent. Each custom tool adds ~100 tokens to the overhead, so keep the list focused.
+
+## Recommended Tools
+
+These tools enhance the gilgamesh environment when available. None are required — gilgamesh works with Go stdlib only.
+
+| Tool | Replaces | Purpose | Install |
+|------|----------|---------|---------|
+| `rg` (ripgrep) | grep | Fast recursive search, respects .gitignore | `apt install ripgrep` |
+| `fd` | find | Fast file finder, simpler syntax | `cargo install fd-find` |
+| `bat` | cat | Syntax highlighting, git integration | `cargo install bat` |
+| `eza` | ls | Icons, git status, tree view | `apt install eza` |
+| `fzf` | — | Fuzzy finder, interactive selection | `apt install fzf` |
+| `btm` (bottom) | top | System monitoring during trials | `apt install bottom` |
+| `delta` | diff | Syntax-highlighted git diffs | `cargo install git-delta` |
+
+Register frequently used tools in `.gilgamesh/tools.json` (see above) and mention them in your `.gilgameshfile` so the agent knows they're available.
+
 ## Memory for Persistent Facts
 
 Use `/remember` in the REPL to store environment facts that persist across sessions:
