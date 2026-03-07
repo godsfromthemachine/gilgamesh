@@ -79,7 +79,7 @@ Add a `.gilgameshfile` or `.gilgamesh/context.md` to your project root to inject
 
 ## Skills
 
-Gilgamesh ships with 6 built-in skills available everywhere:
+Gilgamesh ships with 7 built-in skills available everywhere:
 
 | Skill | Description |
 |-------|-------------|
@@ -89,6 +89,7 @@ Gilgamesh ships with 6 built-in skills available everywhere:
 | `/fix [issue]` | Write failing test, then fix the bug |
 | `/refactor [target]` | Refactor while keeping tests green |
 | `/doc [target]` | Generate or update documentation |
+| `/tdd [feature]` | Red-green-refactor TDD workflow |
 
 Add custom skills by dropping `.md` files into `.gilgamesh/skills/` (project-local) or `~/.config/gilgamesh/skills/` (global). Project-local skills override built-in skills with the same name. Use `{{args}}` for argument substitution.
 
@@ -205,7 +206,7 @@ gilgamesh/
 │   └── server.go     # HTTP API server
 ├── cmd/bench/        # Benchmark suite (Go): raw, API, agent, edit trials
 ├── config/           # JSON config loader (model profiles, tool permissions)
-├── context/          # Project context + skills (6 built-in via go:embed)
+├── context/          # Project context + skills (7 built-in via go:embed)
 ├── hooks/            # Pre/post tool execution hooks
 ├── session/          # JSONL session logging
 └── local-ai/         # (gitignored) llama.cpp binaries + GGUF models
